@@ -1,0 +1,47 @@
+# --- PetaLinux ---
+# Track project-spec/ (meta-user layer, configs, recipes). Ignore everything regenerable.
+build/
+images/linux/
+pre-built/linux/
+components/plnx-workspace/
+components/yocto/
+.petalinux/
+!.petalinux/metadata
+*/*/config.old
+*/*/rootfs_config.old
+
+# --- Vitis (Unified IDE) ---
+Debug/
+Release/
+.metadata/
+
+# --- Vivado ---
+# NOTE: once a real Vivado project exists, run `git init` from Vivado's own Tcl console
+# (not a plain shell) in that project's directory — it inspects the live project and writes
+# a correct, project-specific .gitignore. These are just safety-net defaults until then.
+*.jou
+*.log
+*.str
+*.xpe
+.Xil/
+*.cache/
+*.hw/
+*.ip_user_files/
+*.runs/
+*.sim/
+*.gen/
+webtalk*
+
+# --- ROS2 / colcon ---
+build/
+install/
+log/
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.swp
+*.bak
+
+# --- Planning docs kept out of git (managed in the live shared copy instead) ---
+ENGR496_Li_ASV_Project_Plan.xlsx
