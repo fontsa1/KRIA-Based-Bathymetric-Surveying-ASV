@@ -86,6 +86,48 @@ what replaces the Cube).
 **Action item:** explicitly define what replaces (a) live telemetry/monitoring and (b) manual
 override/e-stop, now that the Cube's radio is gone.
 
+### 3.1 Keeping telemetry cheap on a 4GB board — this is really an Option A/B question
+
+The instinct to avoid "much memory overhead" for telemetry is right, but the actual lever isn't
+which telemetry library is smallest — it's **whether the KR260 needs to run any telemetry/RC
+stack at all**, which is decided by §2:
+
+- **If Option B (hybrid, recommended default) is chosen:** put RC input, telemetry radio, and
+  "return home" logic entirely on the small low-level controller board, exactly like the current
+  Cube does today. A SiK/RFD900-class radio + ArduRover's own RC/telemetry handling costs the
+  KR260 **zero** memory — it never runs on the Zynq PS at all. ArduRover also already has a
+  built-in RC-switch-triggered `RETURN_TO_LAUNCH` mode (`RCx_OPTION`), so "one switch flip →
+  boat comes home" is a firmware feature, not something to build. **Caveat:** stock RTL returns
+  to the *GPS* home position, not a Marvelmind beacon specifically — fine if the retrieval point
+  itself has clear sky view (likely, if it's a dock/bank away from the bridge), but if retrieval
+  also needs to happen in a GPS-denied spot, that's the case below instead.
+- **If Option A (full replacement), or if retrieval specifically must be anchored to a
+  Marvelmind beacon** (e.g. retrieval point itself is GPS-denied): don't reach for
+  MAVLink/MAVROS to build this — there's no MAVLink-speaking autopilot left to bridge to under
+  Option A, and MAVROS/QGroundControl-class tooling is real weight (message-definition parsing,
+  GeographicLib, a GCS-facing proxy) for a problem that doesn't need it here. Instead:
+  - **RC input:** most hobby receivers output **SBUS** (a single-wire inverted UART) — decode it
+    directly on the KR260 with [`sbus_serial`](https://github.com/jenswilly/sbus_serial), which
+    already has a ROS2 Humble branch. This is one small node reading one UART; no PL work needed
+    if using a USB-SBUS/PPM adapter, or a PS UART + a small inverter if wired directly. Use one
+    spare channel as a single "return-to-beacon" trigger — this is not building full RC
+    tele-op, just a one-bit signal.
+  - **"Return to beacon" behavior:** a small ROS2 state-machine node that, on trigger, commands
+    the boat toward the fixed Marvelmind beacon position already present in `robot_localization`'s
+    fused estimate (§8) — this reuses the localization stack that's being built anyway, so the
+    incremental memory cost is one small extra node, not a new subsystem.
+  - **Live telemetry/monitoring beyond RC/WiFi range**, if needed: a cheap SiK/RFD900-class serial
+    radio carrying a small custom packet (position, battery, mode — not MAVLink) is far lighter
+    than any MAVLink/GCS stack, at the cost of writing that tiny protocol yourself instead of
+    getting one for free. If the boat always stays in ROS2-over-WiFi range of the lab
+    laptop (§7), this may not even be needed — worth confirming the actual operating range before
+    building a second radio link.
+
+**Action item:** once §2 is decided, settle whether RC/telemetry lives entirely on the low-level
+board (Option B) or needs the lightweight SBUS + custom-node path on the KR260 (Option A /
+Marvelmind-anchored retrieval), and confirm the real-world WiFi range needed before assuming a
+second radio link is necessary.
+
 ---
 
 ## 4. Sensor interface survey
@@ -102,9 +144,9 @@ free/simple PS path the way that instinct might suggest on other boards.
 |---|---|---|---|
 | **BlueRobotics Ping2** echosounder/altimeter | UART TTL (0–5V), binary "Ping Protocol," default 115200 baud (auto-negotiable 9600–3M) | **USB** (BlueRobotics USB-serial adapter → USB1 hub — see §6) | Low bandwidth, request/response protocol — no case for PL. Ping is TTL 0–5V, not 3.3V — use the official BlueRobotics USB adapter cable (as the current boat likely already does) rather than wiring raw TTL into a PMOD pin, to sidestep level-shifting entirely. This is the core bathymetric data source — see §8. |
 | **BlueRobotics T200** thrusters (×2, **Basic ESC/PWM — decided**, see below) | Standard RC PWM, 1100–1900µs @ 50Hz | **PL PWM generation, PMOD J2 — see §6** | Decided on cost grounds: the team already owns one Basic-ESC-driven thruster, so buying a matching second unit is cheaper than switching both to BlueESC. PL integration work deferred, not blocking. Previous team reports these "haul ass" on lakes; reasonable to assume adequate for river current too, but this is an inherited assumption, not a river-tested one — worth a sanity check once on the water. |
-| **RPLidar A2M12** | UART TTL, 256000 baud 8N1, plus a separate PWM line (25kHz) to control scan-motor speed | **USB**, via its adapter board (USB1 hub — see §6) | Existing ROS2 `rplidar_ros` driver targets exactly this device — reuse it rather than writing custom PL ingestion. The adapter board typically generates the scan-motor PWM onboard and exposes speed control as a serial command, so this likely needs zero PL work at all — see §6 for the one thing to confirm. |
-| **Marvelmind Super-MP beacons** (hedgehog) | UART, CMOS 3.3V, default 500kbps (configurable down to 4.8kbps), CSV stream; or USB-CDC virtual COM port | **USB** (native USB-CDC, USB1 hub — see §6) | Simplest of all the sensors to bring in — no adapter needed. Its role here is bigger than "just a sensor" — see §8 (GPS-denial fallback under bridges). |
-| **GPS** | *Unspecified — the previous team's list omitted it* | Provisionally **USB** (USB1 hub, alongside Ping2/RPLidar/Marvelmind) — see §6 for the CAN contingency | **Action item:** find out which GPS module the current boat actually uses (model/interface) before locking in its port. If it's a CAN-based unit (e.g. a DroneCAN "Here"-style GPS commonly paired with Cube Orange+), the port assignment changes materially — see §6 (J21 + CAN HAT). This is also the 5th device behind the 5-sensors-vs-4-ports constraint — see §6. |
+| **RPLidar A2M12 → recommend replacing with RPLidar S2** | UART TTL, 256000 baud 8N1, plus a separate PWM line (25kHz) to control scan-motor speed | **USB**, via its adapter board (USB1 hub — see §6) | **Confirmed (checked directly): A2M12's own marketing explicitly caveats "outdoor... without direct sunlight" — no ambient-light-immunity spec is published for it, versus the S2's tested 80 klux sunlight immunity.** That caveat is a functional blocker, not a nice-to-have, for a boat operating on an open river under direct sun — this isn't a KR260/interface problem, the sensor itself struggles outdoors in sunlight regardless of compute platform. **Recommendation: swap for the RPLidar S2** ($399 vs. A2M12's $229) — same USB integration pattern (ships with its own USB adapter), same `sllidar_ros2`/`rplidar_ros` ROS2 Humble driver family (Slamtec's own package explicitly supports S2/S3), IP65-rated, and a longer 30m range vs. A2M12's 12m. Drop-in swap: no change to port assignment (§6) or architecture — same USB1 hub slot, zero new PL work either way. |
+| **Marvelmind Super-MP beacons** (hedgehog) | UART, CMOS 3.3V, default 500kbps (configurable down to 4.8kbps), CSV stream; or USB-CDC virtual COM port | **USB** (native USB-CDC, USB1 hub — see §6) | Simplest of all the sensors to bring in — no adapter needed. Its role here is bigger than "just a sensor" — see §8 (GPS-denial fallback under bridges) and §3.1 (RC-triggered return-to-beacon retrieval). |
+| **GPS — Here 3+ confirmed incompatible; recommend a plain USB/UART GNSS module** | Here 3+ uses **DroneCAN** (UAVCAN over CAN bus, 8Mbit) — checked directly against CubePilot's own docs: it's built specifically for ArduPilot/Cube's CAN peripheral and UAVCAN driver stack, not a generic Linux/ROS2 device. It will not "just plug in" to the KR260 without a CAN transceiver + a DroneCAN Linux stack, which is real, unnecessary complexity here. | **USB** (USB1 hub, alongside Ping2/RPLidar/Marvelmind) — the CAN/J21 contingency in §6 is no longer needed once a plain UART/USB module is used | **Recommendation:** a plain u-blox NEO-M8N (or M9N) breakout with **native USB output**, e.g. GNSS Store's NEO-M8N USB-C IP67 receiver (~€90/~$95, USB-C, IP67 outdoor/waterproof-rated — a real plus for a boat) — outputs standard NMEA/UBX over USB-serial, works directly with ROS2's `nmea_navsat_driver` (already ported to ROS2, package `ros-humble-nmea-navsat-driver`) feeding `robot_localization`'s `navsat_transform_node` (already the plan in §8). No CAN bus, no DroneCAN stack, no PL work — this simplifies §6 rather than complicating it. |
 | **Camera** (currently RealSense D435) | USB3 UVC | **To be replaced — see §5**; USB0, dedicated port — see §6 | Current camera confirmed inadequate; replacement TBD. |
 
 ---
@@ -189,18 +231,15 @@ actually resolves the 5-vs-4 shortfall.
 | PMOD J2 | Thruster PWM ×2 (Basic ESC channels) — a 12-pin Pmod has plenty of pins for 2 PWM outputs with room to spare |
 | PMOD J18 | Hardware e-stop input, monitored directly by PL logic that gates the PWM outputs — gives a stop path that still works even if Linux/ROS2/the network link is completely dead. Directly answers §3's open manual-override question, and is a reasonably scoped "real" PL design exercise beyond the DPU. |
 | PMOD J19, J20 | Reserve — spare capacity for small future PL peripherals (single sensor/actuator, low pin count) |
-| **RPi HAT header, J21** | Reserve, earmarked for the GPS-CAN contingency below — see why it's the better fit than a PMOD for that specific case |
+| **RPi HAT header, J21** | Reserve — see §3.1 for a plausible use (SBUS RC input decode) if that path is needed instead of a USB-SBUS adapter |
 
-**GPS contingency, and why J21 specifically:** if the still-unidentified GPS module (§4) turns
-out to be a CAN/DroneCAN unit rather than a plain UART/USB one, note that **KR260 has no CAN
-connector broken out on any carrier connector**. The PS does have hardened CAN-FD, but reaching
-it means routing the PS CAN peripheral out through EMIO to a PL pin and adding an external CAN
-transceiver — meaningfully more PL work than the UART/USB path assumed elsewhere in this doc.
-**J21 (like the PMODs) is PL-routed too, so it doesn't avoid that PL work — but it's the better
-connector for it**: commodity Raspberry Pi "CAN HAT" boards (typically MCP2515-based, SPI +
-interrupt line) are cheap and widely available, and plug straight onto a 40-pin RPi header,
-where a PMOD would need a bespoke CAN-transceiver breakout instead. If GPS turns out to be CAN,
-J21 + an off-the-shelf CAN HAT is the practical answer.
+**GPS/CAN contingency — resolved, no longer needed.** §4 previously flagged that if GPS turned
+out to be a CAN/DroneCAN unit (as the Here 3+ is), it would need J21 + an external CAN
+transceiver, since **KR260 has no CAN connector broken out on any carrier connector** and
+reaching the PS's hardened CAN-FD peripheral means routing it out through EMIO to a PL pin.
+Since §4 now recommends replacing the Here 3+ with a plain USB/UART GNSS module instead of
+working around DroneCAN, this whole contingency is moot — GPS just joins the USB1 hub with the
+other four sensors, no PL work involved.
 
 Worth being deliberate about *not* also moving the thruster PWM/e-stop functions onto J21 just
 because it has plenty of spare pins to hold everything: consolidating safety-critical e-stop
@@ -214,9 +253,9 @@ J21 could technically fit it.
 - [ ] Buy/allocate a small powered USB hub for USB1 port A — required by the plan above, not
       optional.
 - [ ] Confirm whether the RPLidar's included adapter handles scan-motor PWM onboard (as
-      expected — see §4) or exposes a raw PWM pin needing its own PL generation.
-- [ ] Once the GPS model is known, confirm it fits the USB1 hub as planned, or reroute to the
-      J21 CAN contingency above if it turns out to be CAN-based.
+      expected — see §4) or exposes a raw PWM pin needing its own PL generation. Applies equally
+      if swapping to the recommended S2.
+- [ ] Purchase the recommended USB GNSS module (§4) and confirm it fits the USB1 hub as planned.
 
 ---
 
@@ -439,13 +478,24 @@ hardware state costs a multi-hour synth/impl run to discover — worth avoiding 
 - [ ] **Decide Option A vs. B (§2)** — full autopilot replacement vs. keep a lightweight
       low-level controller.
 - [ ] **Define the telemetry/command-link replacement (§3)** — specifically, confirm what
-      provides manual override/e-stop now that the Cube's radio is gone.
-- [ ] Identify the current GPS module (model + interface) — omitted from the inherited sensor
-      list.
+      provides manual override/e-stop now that the Cube's radio is gone, and settle whether
+      RC/telemetry lives on a low-level board (Option B) or on the KR260 via SBUS + a custom node
+      (§3.1) — depends on the Option A/B decision above.
+- [x] ~~Identify the current GPS module~~ — confirmed **Here 3+ (DroneCAN, Cube-specific)**;
+      **recommend replacing** with a plain USB/UART GNSS module (§4). **Action item:** purchase
+      and confirm.
 - [ ] Find out *why* the current RealSense D435 is inadequate, then pick a replacement camera
       from §5 accordingly.
 - [ ] Sanity-check that the Basic-ESC/T200 thrust is adequate against river current, not just
       lake conditions (inherited assumption from the previous team).
+- [x] ~~Decide whether the RPLidar A2M12 will work well with the KR260~~ — the KR260/USB
+      interface side is fine either way; the real issue is the **sensor's own direct-sunlight
+      limitation** for outdoor river use (§4). **Recommendation: replace with RPLidar S2**
+      ($399, 80klux sunlight-rated, same USB integration path). **Action item:** purchase and
+      confirm.
+- [ ] Design the RC-triggered "return to beacon" behavior (§3.1) once §2 is decided — either as
+      an ArduRover-native RTL (Option B) or a custom SBUS-triggered ROS2 node using the fused
+      `robot_localization` position estimate (Option A / Marvelmind-anchored retrieval).
 - [ ] **Sign off on the physical port assignment (§6) as a team** — especially the USB1 hub
       absorbing 4 of the 5 USB-hungry sensors (the 5-sensors-vs-4-ports constraint) — and buy the
       powered USB hub it depends on. Also confirm the RPLidar adapter's motor-PWM behavior and
@@ -485,3 +535,10 @@ hardware state costs a multi-hour synth/impl run to discover — worth avoiding 
 - [KR260 Robotics Starter Kit product brief](https://www.amd.com/content/dam/amd/en/documents/products/som/kria/k26/kr260-product-brief.pdf)
 - [KR260 Robotics Starter Kit User Guide (UG1092)](https://docs.amd.com/r/en-US/ug1092-kr260-starter-kit)
 - [KR260-XDC pinout constraints reference (community)](https://github.com/Mikeantabian/KR260-XDC)
+- [Here 3 Manual (DroneCAN), CubePilot docs](https://docs.cubepilot.org/user-guides/here-3/here-3-manual)
+- [NEO-M8N GNSS USB-C IP67 receiver, GNSS Store](https://gnss.store/products/elt0380)
+- [nmea_navsat_driver (ROS2 port)](https://index.ros.org/p/nmea_navsat_driver/)
+- [RPLIDAR S2 product page (DFRobot)](https://www.dfrobot.com/product-2616.html)
+- [Slamtec sllidar_ros2 driver (ROS2, S2/S3 support)](https://github.com/Slamtec/sllidar_ros2)
+- [sbus_serial ROS2 package](https://github.com/jenswilly/sbus_serial)
+- [ArduPilot Rover RC options / RETURN_TO_LAUNCH](https://ardupilot.org/rover/docs/parameters.html)
