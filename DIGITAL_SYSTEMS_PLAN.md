@@ -561,7 +561,40 @@ Decide explicitly what "e-stop" means:
   (KR260, which could run return-to-beacon, or the manual channel, likely at neutral). Choose it
   on purpose and write it down.
 
-### 13.5 Build and test checklist
+### 13.5 RC transmitter and receiver
+
+The mux (§13.3 Option A) needs an RC receiver that has PWM outputs and lets you set a failsafe
+value on each channel. Channel budget: left thrust, right thrust, SEL (mode switch), plus one
+spare for the return-to-beacon trigger (§3.1). The mux's SEL input accepts 0.5–2.5 ms pulses at
+10–330 Hz, so any standard RC channel works electrically.
+
+**Failsafe is the requirement that matters.** Pololu's default SEL threshold is about 1700 µs,
+with the slave (KR260) inputs live above it. If the team wants the KR260 to take over when the RC
+link drops (e.g. to run return-to-beacon), SEL's failsafe value must sit above roughly 1700 µs
+plus hysteresis. The two thrust channels should fail to 1500 µs (stop).
+
+| Option | Price | Failsafe | Notes |
+|---|---|---|---|
+| **RadioMaster Pocket (ELRS) + ER8 receiver (recommended)** | ~$71.50 + $34.99 | ELRS sets each channel's failsafe between 988 and 2012 µs from the receiver's web UI ([ExpressLRS docs](https://www.expresslrs.org/hardware/pwm-receivers/), [RadioMaster guide](https://radiomasterrc.freshdesk.com/support/solutions/articles/64000308559-expresslrs-pwm-receiver-setup-and-configuration-guide)). | ER8: 8 PWM outputs, 4.5–8.4 V input, dual antenna, plus a CRSF/SBUS serial output ([product](https://radiomasterrc.com/products/er8-2-4ghz-elrs-pwm-receiver)). Pocket runs EdgeTX ([product](https://radiomasterrc.com/products/pocket-radio-controller-m2)). |
+| FlySky FS-i6X + FS-iA6B | price not found | Manual says failsafe is per channel, but a [GitHub issue](https://github.com/iNavFlight/inav/issues/6210) reports it failing to trigger when the transmitter powers off. Not confirmed fixed. | Cheapest, but an unreliable failsafe is the wrong failure mode for a boat. Avoid. |
+| FrSky ACCST/ACCESS (Taranis + X8R-class) | not checked | Per-channel modes: no pulse, hold, custom ([G-RX8 manual](https://www.frsky-rc.com/wp-content/uploads/Downloads/Manual/G-RX8/G-RX8%20ACCST%20-Manual.pdf)). | Proven but older. The ER8 is marketed as a direct replacement for the X8R. |
+
+**Recommendation: Pocket (ELRS) + ER8.** Set failsafe explicitly on every channel rather than
+trusting defaults: the ER8 defaults to 1500 µs except output 3, which defaults to 988 µs. ELRS
+declares failsafe after 1 second with no valid packet or when link quality reaches 0, so there is
+up to a second before the KR260 takes over.
+
+**Not yet verified:**
+- ELRS receivers speak CRSF natively, so `sbus_serial` (§3.1) may need the receiver's serial
+  protocol set to SBUS. Confirm before relying on it for the return-to-beacon trigger.
+- The Pocket product page doesn't detail EdgeTX's left/right ("tank") mixing. EdgeTX's mixer is
+  believed to support it, but confirm before buying.
+- No real-world range figure was found for the ER8. Check the link against the longest river
+  distance planned.
+- The ER8 product page doesn't mention per-channel failsafe; that comes from the ExpressLRS docs
+  and RadioMaster's guide.
+
+### 13.6 Build and test checklist
 
 - [ ] Bench: one T200 + Basic ESC + KR260 PL PWM alone (no mux): arming, stop, both directions,
       deadband around 1500 µs (check the T200 datasheet for the exact range).
@@ -576,8 +609,9 @@ Decide explicitly what "e-stop" means:
 **Action items:**
 - [ ] Choose the switching option (§13.3), pending the Option A/B decision in §2.
 - [ ] Decide what the e-stop cuts and where (§13.4).
-- [ ] Pick the RC transmitter/receiver (PWM outputs, failsafe programmable per channel, enough
-      channels: 2 thrust + SEL + optional return-to-beacon trigger).
+- [ ] Confirm the RC pair (§13.5, recommended Pocket ELRS + ER8): check EdgeTX tank mixing and
+      range, set per-channel failsafe (SEL above ~1700 µs if the KR260 should take over on link
+      loss), and confirm the SBUS-vs-CRSF serial output for the return-to-beacon trigger.
 - [ ] Confirm power-system current capacity and fusing against T200 peak draw.
 
 ---
@@ -644,6 +678,12 @@ Decide explicitly what "e-stop" means:
 - [BlueRobotics Thruster Commander docs](https://docs.bluerobotics.com/commander/)
 - [Blue Robotics forum: T200 + third-party ESC compatibility](https://discuss.bluerobotics.com/t/t200-3rd-party-esc-compatibility-issue/20989)
 - [Flipsky VESC PPM/UART/PPM+UART control modes](https://flipsky.net/blogs/vesc-tool/vx4-three-control-mode-ppm-uart-ppm-and-uart)
+- [ExpressLRS PWM receivers](https://www.expresslrs.org/hardware/pwm-receivers/)
+- [RadioMaster ELRS PWM receiver setup guide](https://radiomasterrc.freshdesk.com/support/solutions/articles/64000308559-expresslrs-pwm-receiver-setup-and-configuration-guide)
+- [RadioMaster ER8 ELRS PWM receiver](https://radiomasterrc.com/products/er8-2-4ghz-elrs-pwm-receiver)
+- [RadioMaster Pocket radio controller](https://radiomasterrc.com/products/pocket-radio-controller-m2)
+- [FlySky FS-iA6B failsafe issue (INAV #6210)](https://github.com/iNavFlight/inav/issues/6210)
+- [FrSky G-RX8 ACCST manual (failsafe modes)](https://www.frsky-rc.com/wp-content/uploads/Downloads/Manual/G-RX8/G-RX8%20ACCST%20-Manual.pdf)
 - [robot_localization ROS2 package](https://github.com/cra-ros-pkg/robot_localization)
 - [USVInland dataset](https://github.com/ORCA-Uboat/USVInland-Dataset)
 - [MODS maritime obstacle detection benchmark](https://arxiv.org/abs/2105.02359)
