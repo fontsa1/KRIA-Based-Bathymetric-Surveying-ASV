@@ -473,8 +473,119 @@ hardware state costs a multi-hour synth/impl run to discover — worth avoiding 
 
 ---
 
-## 13. Open questions / action items
+## 13. Thrusters
 
+Everything needed to turn a navigation/RC command into thrust on the water: the thrusters, their
+ESCs, the signal path from the KR260 and from an RC receiver, how control switches between them,
+and the safety behavior around it. Ties together §4 (T200/Basic ESC), §6 (PMOD J2/J18), §3 and
+§3.1 (manual override, RC), and §2 (Option A/B).
+
+### 13.1 What's decided, and what the hardware requires
+
+- **Thrusters:** 2× BlueRobotics T200 (one per side, differential drive), **Basic ESC** each —
+  decided on cost grounds in §4.
+- **ESC interface:** standard hobby PWM, **1100–1900 µs at 50 Hz, 1500 µs = stop** (bidirectional
+  firmware). Blue Robotics forum guidance for third-party ESCs lists the same requirements:
+  2–7S, ≤30 A, BLHeli_S firmware, bidirectional PWM. Third-party ESCs have been [reported to make
+  T200s twitch](https://discuss.bluerobotics.com/t/t200-3rd-party-esc-compatibility-issue/20989),
+  so treat the Basic ESC as the known-good path and don't swap ESC families casually.
+- **Arming:** hobby ESCs generally need a valid neutral (1500 µs) pulse train at power-up before
+  they'll respond. Whatever drives the ESC input, including a multiplexer, must present neutral
+  from the moment the ESC powers on, not a floating or low line. **Verify on the bench against the
+  Basic ESC's documented arming sequence.**
+- **Power:** thruster power comes from the existing power system (already solved, carried over).
+  Confirm it, with a fuse, can source both thrusters' peak current (T200/Basic ESC datasheet
+  figures, not assumed here) and that the ESC battery/BEC ground is common with the signal
+  source's ground.
+- **Enclosure:** the Basic ESC is a hobby ESC, not waterproof. It lives in a waterproof box with
+  the rest of the electronics, with the thruster cable through a penetrator.
+
+### 13.2 The signal chain
+
+```
+RC receiver  ──(2 thrust PWM ch)──►  M inputs ┐
+                                               │  PWM mux  ──(L/R PWM)──►  Basic ESC ×2 ──► T200 ×2
+KR260 PL PWM ──(2 PWM, PMOD J2)───►  S inputs ┘
+Spare RC ch  ────────────────────►  SEL
+```
+
+**KR260 side (autonomous path):**
+- PWM generation in **PL**, on **PMOD J2** (§6): a small AXI-attached PWM core (two channels,
+  50 Hz period, pulse width settable at ~1 µs resolution over 1100–1900 µs), plus a device-tree
+  node and a bitstream. PMOD outputs are 3.3 V logic. **Confirm the mux/ESC input registers 3.3 V
+  reliably** (Pololu's slave-input logic threshold is not stated on its product page).
+- A ROS2 node converts navigation commands (speed/steer or left/right) into the PL registers.
+  Mixing to left/right happens here for the autonomous path.
+- **Watchdog in PL:** if the PS stops refreshing the PWM registers (Linux/ROS2 hang), the PL
+  forces both outputs to neutral after a short timeout, without software involvement. This is
+  the same "works even when Linux is dead" idea as the e-stop design in §6.
+- Neutral is the reset state. On bitstream load or PS reset the outputs are 1500 µs, never 0.
+
+**RC side (manual path):** a hobby RC receiver with PWM outputs. Left/right mixing for manual
+driving is done in the transmitter or receiver (e.g. a differential/"tank" mix), since the mux
+passes two independent channels straight through. This is separate from the SBUS decode described
+in §3.1, which is a single-bit "return to beacon" trigger read by the KR260.
+
+### 13.3 Options for switching between KR260 and RC
+
+The BlueRobotics Thruster Commander can't do this: its inputs are potentiometer
+inputs, mode is chosen by which pins are wired, and it has no source selection. Checked against
+its manual and docs. Options that can:
+
+| Option | Switching | Cost | Notes |
+|---|---|---|---|
+| **A. Basic ESCs + Pololu 4-channel RC servo multiplexer (recommended)** | Hardware. A spare RC channel on SEL picks master (M) or slave (S) inputs per a user-set threshold (default ~1700 µs, ±64 µs hysteresis). | ~$18 ([product](https://www.pololu.com/product/2806)) | Purpose-built for autonomous/manual override. 2.5–16 V supply, SEL accepts 0.5–2.5 ms pulses at 10–330 Hz. Failsafe is a jumper: off, master inputs take control if SEL is lost; on, outputs go low. Keeps the Basic ESCs. Works with the KR260 hung or unpowered. |
+| B. Basic ESCs + Acroname RxMux | Same idea, 8 channels, 2 sources. | ~$19 ([product](https://acroname.com/store/s56-rxmux-1)) | Defaults to input A if SEL is absent, and the vendor states it provides no failsafe or redundancy by itself. More channels than needed here. |
+| C. Mux inside the PL | Logic in the KR260's fabric selects between the decoded RC signal and the autonomous PWM. | No hardware cost | Extends the J18 e-stop gating design. Loses manual control if the KR260 loses power or the PL is unconfigured, which is exactly when a manual override matters. Acceptable only if the KR260 is trusted to stay up. |
+| D. Option B hybrid low-level board (§2) | Native to the flight-controller firmware (ArduRover RC passthrough and mode arbitration). | Depends on board | No separate mux needed and no PL PWM work. Outputs PWM to the ESCs directly. Only applicable if §2 chooses B. |
+| E. VESC-class ESCs | Firmware supports combined PPM+UART control ([Flipsky](https://flipsky.net/blogs/vesc-tool/vx4-three-control-mode-ppm-uart-ppm-and-uart)). | Varies | Which input wins when both are active was not found documented, and T200 compatibility with VESC is unconfirmed. Not recommended without a bench test. |
+| F. Roboteq BLDC controllers | RC, serial and CAN inputs. | High | Sized for much larger motors than a T200. Input-priority behavior not verified. Overkill here. |
+
+**Recommendation: Option A**, unless §2 selects the hybrid architecture, in which case D removes
+the need for it. **Not yet verified on hardware:** that the Pololu mux passes 1100–1900 µs pulses
+through unchanged (its page doesn't say so explicitly) and that it accepts the KR260's 3.3 V PWM.
+Bench-test both with a scope before wiring the boat.
+
+### 13.4 Safety: where the e-stop actually sits
+
+§6 puts a hardware e-stop input on PMOD J18 that gates the KR260's PWM outputs in the PL. With a
+mux, that gate only stops the **autonomous** path: the manual path reaches the ESCs regardless.
+Decide explicitly what "e-stop" means:
+
+- **Cut at the ESC power** (a contactor/relay in the thruster supply, driven by the e-stop) is the
+  only version that stops the boat whichever source is selected. A stop at the PWM level would
+  have to sit downstream of the mux.
+- **Neutral-forcing after the mux** (a second gate between the mux output and the ESC inputs) is
+  the lower-power alternative.
+- The RC failsafe setting on the SEL channel decides who takes control when the RC link drops
+  (KR260, which could run return-to-beacon, or the manual channel, likely at neutral). Choose it
+  on purpose and write it down.
+
+### 13.5 Build and test checklist
+
+- [ ] Bench: one T200 + Basic ESC + KR260 PL PWM alone (no mux): arming, stop, both directions,
+      deadband around 1500 µs (check the T200 datasheet for the exact range).
+- [ ] Bench: add the mux; scope the output pulse widths against the inputs (pass-through
+      accuracy), confirm 3.3 V slave input works, and test SEL switching mid-run.
+- [ ] Confirm arming works through the mux, including power-up with SEL in each position.
+- [ ] Test PL watchdog: kill the ROS2 node, then hang Linux; outputs must go to neutral.
+- [ ] Test SEL loss, RC receiver power loss, and KR260 power loss; record who has control in each.
+- [ ] Wire and test the e-stop per §13.4 in whichever form the team chooses.
+- [ ] On-water check of thrust against river current (§14 item; inherited assumption).
+
+**Action items:**
+- [ ] Choose the switching option (§13.3), pending the Option A/B decision in §2.
+- [ ] Decide what the e-stop cuts and where (§13.4).
+- [ ] Pick the RC transmitter/receiver (PWM outputs, failsafe programmable per channel, enough
+      channels: 2 thrust + SEL + optional return-to-beacon trigger).
+- [ ] Confirm power-system current capacity and fusing against T200 peak draw.
+
+---
+
+## 14. Open questions / action items
+
+- [ ] **Choose the thruster switching option and e-stop design (§13)**: mux vs. hybrid board,
+      and what the e-stop physically cuts.
 - [ ] **Decide Option A vs. B (§2)** — full autopilot replacement vs. keep a lightweight
       low-level controller.
 - [ ] **Define the telemetry/command-link replacement (§3)** — specifically, confirm what
@@ -528,6 +639,11 @@ hardware state costs a multi-hour synth/impl run to discover — worth avoiding 
 - [BlueESC documentation](https://docs.bluerobotics.com/bluesc/)
 - [Marvelmind beacon hardware interfaces](https://marvelmind.com/pics/marvelmind_interfaces.pdf)
 - [Marvelmind ROS2 upstream package](https://github.com/MarvelmindRobotics/marvelmind_ros2_upstream)
+- [Pololu 4-Channel RC Servo Multiplexer](https://www.pololu.com/product/2806)
+- [Acroname RxMux 8-Channel Servo Multiplexer](https://acroname.com/store/s56-rxmux-1)
+- [BlueRobotics Thruster Commander docs](https://docs.bluerobotics.com/commander/)
+- [Blue Robotics forum: T200 + third-party ESC compatibility](https://discuss.bluerobotics.com/t/t200-3rd-party-esc-compatibility-issue/20989)
+- [Flipsky VESC PPM/UART/PPM+UART control modes](https://flipsky.net/blogs/vesc-tool/vx4-three-control-mode-ppm-uart-ppm-and-uart)
 - [robot_localization ROS2 package](https://github.com/cra-ros-pkg/robot_localization)
 - [USVInland dataset](https://github.com/ORCA-Uboat/USVInland-Dataset)
 - [MODS maritime obstacle detection benchmark](https://arxiv.org/abs/2105.02359)
