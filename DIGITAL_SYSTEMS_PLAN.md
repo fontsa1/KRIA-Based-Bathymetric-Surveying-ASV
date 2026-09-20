@@ -132,7 +132,9 @@ second radio link is necessary.
 
 ## 4. Sensor interface survey
 
-Carried over from the previous team's sensor list, evaluated for KR260 fit. General rule used
+Originally carried over from the previous team's sensor list, evaluated for KR260 fit; now
+updated with the team's decisions (camera, lidar, GPS, thruster control, RC link). Rows are marked
+**chosen**, **recommended** (not yet bought or bench-tested), **existing**, or **open**. General rule used
 throughout: **PL only when you need hard real-time determinism, raw bandwidth too high for
 Linux to comfortably move, or tight multi-sensor timestamp sync — otherwise use the PS's
 built-in Linux peripherals**, since the whole ROS2 driver ecosystem assumes a Linux device node
@@ -140,14 +142,17 @@ and custom PL sensor logic means custom drivers to build and maintain. On KR260 
 "PS peripheral" in practice means **USB** — see §6 for why the PMOD headers don't give you a
 free/simple PS path the way that instinct might suggest on other boards.
 
-| Sensor | Interface (confirmed) | Recommended path | Notes |
+| Sensor / device | Interface (confirmed) | Recommended path | Notes |
 |---|---|---|---|
-| **BlueRobotics Ping2** echosounder/altimeter | UART TTL (0–5V), binary "Ping Protocol," default 115200 baud (auto-negotiable 9600–3M) | **USB** (BlueRobotics USB-serial adapter → USB1 hub — see §6) | Low bandwidth, request/response protocol — no case for PL. Ping is TTL 0–5V, not 3.3V — use the official BlueRobotics USB adapter cable (as the current boat likely already does) rather than wiring raw TTL into a PMOD pin, to sidestep level-shifting entirely. This is the core bathymetric data source — see §8. |
-| **BlueRobotics T200** thrusters (×2, **Basic ESC/PWM — decided**, see below) | Standard RC PWM, 1100–1900µs @ 50Hz | **PL PWM generation, PMOD J2 — see §6** | Decided on cost grounds: the team already owns one Basic-ESC-driven thruster, so buying a matching second unit is cheaper than switching both to BlueESC. PL integration work deferred, not blocking. Previous team reports these "haul ass" on lakes; reasonable to assume adequate for river current too, but this is an inherited assumption, not a river-tested one — worth a sanity check once on the water. |
-| **RPLidar A2M12 → recommend replacing with RPLidar S2** | UART TTL, 256000 baud 8N1, plus a separate PWM line (25kHz) to control scan-motor speed | **USB**, via its adapter board (USB1 hub — see §6) | **Confirmed (checked directly): A2M12's own marketing explicitly caveats "outdoor... without direct sunlight" — no ambient-light-immunity spec is published for it, versus the S2's tested 80 klux sunlight immunity.** That caveat is a functional blocker, not a nice-to-have, for a boat operating on an open river under direct sun — this isn't a KR260/interface problem, the sensor itself struggles outdoors in sunlight regardless of compute platform. **Recommendation: swap for the RPLidar S2** ($399 vs. A2M12's $229) — same USB integration pattern (ships with its own USB adapter), same `sllidar_ros2`/`rplidar_ros` ROS2 Humble driver family (Slamtec's own package explicitly supports S2/S3), IP65-rated, and a longer 30m range vs. A2M12's 12m. Drop-in swap: no change to port assignment (§6) or architecture — same USB1 hub slot, zero new PL work either way. |
-| **Marvelmind Super-MP beacons** (hedgehog) | UART, CMOS 3.3V, default 500kbps (configurable down to 4.8kbps), CSV stream; or USB-CDC virtual COM port | **USB** (native USB-CDC, USB1 hub — see §6) | Simplest of all the sensors to bring in — no adapter needed. Its role here is bigger than "just a sensor" — see §8 (GPS-denial fallback under bridges) and §3.1 (RC-triggered return-to-beacon retrieval). |
-| **GPS — Here 3+ confirmed incompatible; recommend a plain USB/UART GNSS module** | Here 3+ uses **DroneCAN** (UAVCAN over CAN bus, 8Mbit) — checked directly against CubePilot's own docs: it's built specifically for ArduPilot/Cube's CAN peripheral and UAVCAN driver stack, not a generic Linux/ROS2 device. It will not "just plug in" to the KR260 without a CAN transceiver + a DroneCAN Linux stack, which is real, unnecessary complexity here. | **USB** (USB1 hub, alongside Ping2/RPLidar/Marvelmind) — the CAN/J21 contingency in §6 is no longer needed once a plain UART/USB module is used | **Recommendation:** a plain u-blox NEO-M8N (or M9N) breakout with **native USB output**, e.g. GNSS Store's NEO-M8N USB-C IP67 receiver (~€90/~$95, USB-C, IP67 outdoor/waterproof-rated — a real plus for a boat) — outputs standard NMEA/UBX over USB-serial, works directly with ROS2's `nmea_navsat_driver` (already ported to ROS2, package `ros-humble-nmea-navsat-driver`) feeding `robot_localization`'s `navsat_transform_node` (already the plan in §8). No CAN bus, no DroneCAN stack, no PL work — this simplifies §6 rather than complicating it. |
-| **Camera** (currently RealSense D435) | USB3 UVC | **To be replaced — see §5**; USB0, dedicated port — see §6 | Current camera confirmed inadequate; replacement TBD. |
+| **BlueRobotics Ping2** echosounder/altimeter (**existing**) | UART TTL (0–5V), binary "Ping Protocol," default 115200 baud (auto-negotiable 9600–3M) | **USB** (BlueRobotics USB-serial adapter → USB1 hub — see §6) | Low bandwidth, request/response protocol — no case for PL. Ping is TTL 0–5V, not 3.3V — use the official BlueRobotics USB adapter cable (as the current boat likely already does) rather than wiring raw TTL into a PMOD pin, to sidestep level-shifting entirely. This is the core bathymetric data source — see §8. |
+| **BlueRobotics T200** thrusters ×2 + **Basic ESC** ×2 (**decided**) | Standard RC PWM, 1100–1900µs @ 50Hz, 1500µs = stop | **PL PWM generation, PMOD J2 (§6), through the PWM mux below** — full chain in §13 | Basic ESC chosen on cost grounds: the team already owns one Basic-ESC-driven thruster. Previous team reports these "haul ass" on lakes; an inherited assumption for river current, not river-tested — worth a sanity check once on the water. The Thruster Commander is **not** in the signal path (potentiometer-only inputs, no source selection); it stays a bench-test tool (§13.3). |
+| **PWM multiplexer — Pololu 4-channel RC servo mux** (**recommended, not yet bought or bench-tested**) | RC servo PWM in and out. Master and slave inputs, 4 channels; SEL takes a 0.5–2.5 ms pulse; 2.5–16 V supply | Sits between the RC receiver + KR260 PMOD J2 and the two Basic ESCs — **no KR260 port used**, see §13.2–13.3 | ~$18. A spare RC channel on SEL switches manual (RC receiver) vs. autonomous (KR260). Works with the KR260 hung or unpowered. Still to verify: it passes 1100–1900 µs unchanged and accepts the KR260's 3.3 V PWM. |
+| **RC transmitter + receiver — RadioMaster Pocket (ELRS) + ER8 receiver** (**recommended, not yet bought**) | 2.4 GHz ELRS link; ER8 has 8 PWM outputs plus a CRSF/SBUS serial output | PWM outputs → mux master inputs. Optional serial output → KR260 for the return-to-beacon trigger (§3.1; needs a serial path, see §6) | ~$107 together. Per-channel failsafe (988–2012 µs) is set in the receiver's web UI; set SEL's failsafe on purpose (§13.5). Still to verify: EdgeTX tank mixing, ELRS-to-SBUS serial for `sbus_serial`, and real-world range. |
+| **RPLidar S2** (**chosen; replaces A2M12**) | TTL UART, ships with a USB adapter and micro-USB cable | **USB**, via its adapter (USB1 hub — see §6) | Chosen for sunlight tolerance: the A2M12 is marketed for outdoor use "without direct sunlight" with no published ambient-light spec, while the S2 is rated for 80 klux and IP65, with a 30 m range vs. 12 m ($399 vs. $229). ROS2 support does not separate them: `ros-humble-rplidar-ros` 2.1.4 installs from the Humble apt repo, and Slamtec's `sllidar_ros2` (source build, S2 launch file `view_sllidar_s2_launch.py`) also supports it. Still to confirm: the adapter handles scan-motor control with no PL work. |
+| **Marvelmind Super-MP beacons** (hedgehog) (**existing**) | UART, CMOS 3.3V, default 500kbps (configurable down to 4.8kbps), CSV stream; or USB-CDC virtual COM port | **USB** (native USB-CDC, USB1 hub — see §6) | Simplest sensor to bring in — no adapter needed. Bigger role than "just a sensor": GPS-denial positioning under bridges (§8) and the anchor for return-to-beacon retrieval (§3.1). Beacon locations must be georeferenced to GPS (§14). |
+| **GPS — u-blox NEO-M8N USB-C IP67 receiver** (**chosen; replaces Here 3+**, ~€90, [GNSS Store](https://gnss.store/products/elt0380)) | USB-C, standard NMEA/UBX over USB-serial | **USB** (USB1 hub — see §6) | The Here 3+ is DroneCAN (CAN bus, built for Cube/ArduPilot) and won't plug into the KR260 without a CAN transceiver and a DroneCAN Linux stack, so it's out; the §6 CAN/J21 contingency is no longer needed. Precision isn't a requirement: Marvelmind covers the GPS-denied bridge segments. Driver: `ros-humble-nmea-navsat-driver` (apt), feeding `robot_localization`'s `navsat_transform_node` (§8). An M9N is an acceptable substitute. |
+| **Camera — Luxonis OAK-D family** (**chosen; replaces RealSense D435**) | USB3 (DepthAI) | **USB0, port A, dedicated** — see §6 | Stereo depth + RGB at a reasonable price. No USB OAK-D has an IP rating, so waterproofing is the team's 3D-printed chassis with an anti-reflective glass panel and hydrophobic coating (§5). Variant still to pick: **OAK-D S2 ($329) recommended**, OAK-D Lite ($269) as the budget option. Driver: `ros-humble-depthai-ros` (2.12.2 in the apt repo for arm64). Stereo depth is short-range (about 7.5 cm baseline). Not yet tested on the KR260. |
+| **Heading source (compass/IMU)** (**open**) | To be decided | Likely USB or an existing sensor | The Here 3+ had a built-in compass and IMU, and a plain GNSS module has neither. GPS course-over-ground is unreliable at low speed in current. Options: an external compass/IMU, the OAK-D's onboard IMU if usable, or dual-GNSS heading. Needed before finalizing the §8 fusion design. |
 
 ---
 
@@ -178,12 +183,28 @@ straightforward, low-risk default.
 | Allied Vision Alvium 1500-C (MIPI CSI-2) | MIPI CSI-2 | $277–$477 depending on sensor/resolution | Confirmed compatible with **KV260** via a dedicated adapter board — compatibility with **KR260**'s different carrier/connector is unverified, and this is a single 2D sensor (no depth without a stereo pair + your own algorithm). |
 | FRAMOS FSM-IMX547 (SLVS-EC) | SLVS-EC (KR260-native) | Quote-only, not public | The "true PL ingestion" reference path for KR260 specifically — monochrome, industrial-grade, higher effort/cost. |
 
-**Recommendation:** default to a USB3 camera (RealSense D455 if range/FOV was the D435's
-problem) for the MVP; treat SLVS-EC/PL-native ingestion as a stretch goal only if CPU load or
-latency actually becomes a measured bottleneck, not a default design choice.
+**Decision: Luxonis OAK-D family over USB3.** Chosen for stereo depth plus a good RGB camera at a
+reasonable price. Treat SLVS-EC/PL-native ingestion as a stretch goal only if CPU load or latency
+becomes a measured bottleneck.
 
-**Action item:** find out specifically *why* the current D435 is inadequate before picking its
-replacement — the answer changes which option above actually solves the problem.
+- **Variant:** OAK-D S2 ($329, 12 MP RGB, autofocus or fixed-focus) is the recommendation; OAK-D
+  Lite ($269, 4K RGB, depth listed up to about 33 ft / 10 m) is the cheaper fallback. Fixed focus
+  is probably the safer choice behind a glass panel, since autofocus can hunt on the glass.
+- **The onboard Myriad X AI is redundant** with the DPU (see the table); the camera is being
+  bought for depth and RGB.
+- **Stereo depth range is limited.** With a ~7.5 cm baseline, depth error grows quickly with
+  distance, so stereo depth is a short-range obstacle aid. Longer-range obstacle ranging comes
+  from the RPLidar S2 (§4), and object recognition from YOLO on the RGB stream.
+- **Waterproofing is the team's chassis, not the camera.** None of the USB OAK-D models has an IP
+  rating (only the PoE variants do, and PoE would need a switch since the KR260's second Ethernet
+  jack is PL-routed, §7). Plan for: glass panel close to and gasketed against both stereo lenses
+  (gaps and reflections degrade depth), anti-reflective coating, a desiccant pack or vent plug
+  against condensation, and a thermal path for camera heat.
+
+**Action items:**
+- [ ] Pick S2 vs. Lite, and fixed vs. autofocus.
+- [ ] Test DepthAI on the KR260 (USB udev rule for vendor `03e7`, USB3 enumeration, sustained
+      framerate) before committing to the enclosure design.
 
 ---
 
@@ -206,7 +227,7 @@ sensor already in this plan speaks USB or serial-over-USB, **USB is the natural 
 nearly everything**, and PMOD should be reserved for the things that are PL work regardless
 (thruster PWM, and a good candidate use below).
 
-**Hard constraint — flag this and keep it in view: 5 sensors want USB (Ping2/sonar, RPLidar,
+**Hard constraint — flag this and keep it in view: 5 sensors want USB (Ping2/sonar, RPLidar S2,
 Marvelmind, GPS, camera), but the board has only 4 physical USB3 ports.** This doesn't block
 the USB-first plan, but it means one port has to be shared, and it should be a deliberate
 choice, not something discovered mid-build.
@@ -226,12 +247,12 @@ actually resolves the 5-vs-4 shortfall.
 |---|---|
 | USB0, port A | Camera — dedicated, don't share this hub pair with anything bandwidth-heavy |
 | USB0, port B | Free — keyboard/mouse for desktop-mode bench debugging, or a WiFi dongle (ties to §3's command-link decision); not needed simultaneously with the camera in normal (non-desktop) operation |
-| USB1, port A | Small powered USB hub → Ping2 (BlueRobotics USB-serial adapter), RPLidar A2M12 (its USB adapter board), Marvelmind hedgehog (native USB-CDC), **and** GPS once identified (§4) — this hub is where the 5-vs-4 port shortfall gets absorbed |
+| USB1, port A | Small powered USB hub → Ping2 (BlueRobotics USB-serial adapter), RPLidar S2 (its USB adapter), Marvelmind hedgehog (native USB-CDC), GPS (NEO-M8N USB-C), **and** optionally a USB-serial adapter for the ER8 receiver's SBUS/CRSF output (return-to-beacon trigger, §3.1) — this hub is where the 5-vs-4 port shortfall gets absorbed. A heading sensor (§4, open) may add one more. |
 | USB1, port B | Free — spare/expansion headroom |
-| PMOD J2 | Thruster PWM ×2 (Basic ESC channels) — a 12-pin Pmod has plenty of pins for 2 PWM outputs with room to spare |
-| PMOD J18 | Hardware e-stop input, monitored directly by PL logic that gates the PWM outputs — gives a stop path that still works even if Linux/ROS2/the network link is completely dead. Directly answers §3's open manual-override question, and is a reasonably scoped "real" PL design exercise beyond the DPU. |
+| PMOD J2 | Thruster PWM ×2 (autonomous path) → the slave inputs of the PWM mux, which feeds the Basic ESCs (§13.2). A 12-pin Pmod has plenty of pins for 2 PWM outputs with room to spare. |
+| PMOD J18 | Hardware e-stop input, monitored directly by PL logic that gates the PWM outputs — a stop path that still works even if Linux/ROS2/the network link is dead. **With the mux, this gates only the autonomous path**; what the e-stop must cut for the manual path too is an open decision (§13.4). |
 | PMOD J19, J20 | Reserve — spare capacity for small future PL peripherals (single sensor/actuator, low pin count) |
-| **RPi HAT header, J21** | Reserve — see §3.1 for a plausible use (SBUS RC input decode) if that path is needed instead of a USB-SBUS adapter |
+| **RPi HAT header, J21** | Reserve — a plausible use is decoding the ER8's SBUS output (§3.1) if a USB-serial adapter isn't used instead |
 
 **GPS/CAN contingency — resolved, no longer needed.** §4 previously flagged that if GPS turned
 out to be a CAN/DroneCAN unit (as the Here 3+ is), it would need J21 + an external CAN
@@ -629,8 +650,19 @@ up to a second before the KR260 takes over.
 - [x] ~~Identify the current GPS module~~ — confirmed **Here 3+ (DroneCAN, Cube-specific)**;
       **recommend replacing** with a plain USB/UART GNSS module (§4). **Action item:** purchase
       and confirm.
-- [ ] Find out *why* the current RealSense D435 is inadequate, then pick a replacement camera
-      from §5 accordingly.
+- [x] ~~Pick a replacement camera~~ — **Luxonis OAK-D family chosen** (§5). Still open: S2 vs.
+      Lite, fixed vs. autofocus, and a DepthAI test on the KR260.
+- [ ] **Heading source.** The Here 3+ has a built-in compass and IMU; replacing it with a plain
+      GNSS module removes both. A single GNSS receiver gives course-over-ground only, which is
+      unreliable at low speed in current. Decide where heading comes from (an external
+      compass/IMU, whether the OAK-D's onboard IMU is usable, or dual-GNSS heading) before
+      finalizing the §8 fusion design.
+- [x] ~~Decide the GPS module~~ — **NEO-M8N (or M9N) USB module chosen** (§4). Precision GPS
+      isn't needed because Marvelmind covers the GPS-denied bridge segments. Purchase and confirm.
+- [ ] **Georeference the Marvelmind beacons.** Marvelmind positions are in a local frame, so the
+      beacon locations must be tied to GPS coordinates (§8). The GPS quality at beacon placement
+      sets the absolute accuracy of the under-bridge data; confirm meter-level is acceptable for
+      the survey.
 - [ ] Sanity-check that the Basic-ESC/T200 thrust is adequate against river current, not just
       lake conditions (inherited assumption from the previous team).
 - [x] ~~Decide whether the RPLidar A2M12 will work well with the KR260~~ — the KR260/USB
@@ -643,8 +675,8 @@ up to a second before the KR260 takes over.
       `robot_localization` position estimate (Option A / Marvelmind-anchored retrieval).
 - [ ] **Sign off on the physical port assignment (§6) as a team** — especially the USB1 hub
       absorbing 4 of the 5 USB-hungry sensors (the 5-sensors-vs-4-ports constraint) — and buy the
-      powered USB hub it depends on. Also confirm the RPLidar adapter's motor-PWM behavior and
-      the GPS CAN-vs-UART/USB contingency (J21).
+      powered USB hub it depends on. Also confirm the RPLidar S2 adapter's scan-motor behavior; the
+      GPS CAN contingency is retired (§4).
 - [ ] Confirm which Ethernet jack is PS-native (for the static-IP/SSH setup) and check with
       lab/campus IT on static IP vs. DHCP reservation (§7).
 - [ ] Get the previous team's ROS2 Humble repo(s) and their specific training-dataset
@@ -673,6 +705,8 @@ up to a second before the KR260 takes over.
 - [BlueESC documentation](https://docs.bluerobotics.com/bluesc/)
 - [Marvelmind beacon hardware interfaces](https://marvelmind.com/pics/marvelmind_interfaces.pdf)
 - [Marvelmind ROS2 upstream package](https://github.com/MarvelmindRobotics/marvelmind_ros2_upstream)
+- [Luxonis IP rating docs](https://docs.luxonis.com/hardware/platform/environmental-specifications/ip-rating)
+- [Slamtec sllidar_ros2 driver](https://github.com/Slamtec/sllidar_ros2)
 - [Pololu 4-Channel RC Servo Multiplexer](https://www.pololu.com/product/2806)
 - [Acroname RxMux 8-Channel Servo Multiplexer](https://acroname.com/store/s56-rxmux-1)
 - [BlueRobotics Thruster Commander docs](https://docs.bluerobotics.com/commander/)
