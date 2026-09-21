@@ -4,17 +4,14 @@ Boat 2 of the DOT-funded Autonomous Surface Vehicle (bathymetric surveying / bri
 mapping) project. This sub-team is replacing the current digital stack —
 **NVIDIA Jetson Orin Nano + Cube Orange+** — with a single **AMD/Xilinx Kria KR260**
 (Zynq UltraScale+ MPSoC), running Vitis AI (DPU + YOLO) and ROS2. The hull itself is a
-boogie board with waterproof boxes mounted on it for electronics/sensors — not a 3D-printed
-structure; the 3D prints (reused from the original boat) are mounting brackets/enclosures for
-sensors and digital hardware, not the platform itself. Power system is already solved and
-carried over from the original boat.
-
+boogie board with waterproof boxes mounted on it for electronics/sensors.
+Power system will be redesigned from the current boat as different digital hardware has different power needs.
 This doc is the living plan for the electronics/compute side: toolchain, sensor interfacing,
-PS/PL partitioning, and open decisions. Update it as decisions get made — don't let it go stale.
+PS/PL partitioning, and open decisions. Update it as decisions get made, don't let it go stale.
 
 ---
 
-## 1. Toolchain — decided
+## 1. Toolchain
 
 **Vivado / Vitis / PetaLinux 2023.1, Vitis AI 3.5. Whole team confirmed on this set** (Enterprise
 licenses cover it). **Linux base: Kria Ubuntu 22.04 (already installed on the board), ROS2
@@ -31,41 +28,56 @@ use (e.g. LogicTronix's
 [KR260 DPU-TRD Vivado-flow tutorial](https://www.hackster.io/LogicTronix/kria-kr260-dpu-trd-vivado-flow-vitis-ai-3-0-tutorial-0085fd),
 [KR260-DPU-TRD-Vitis-AI-3.0 repo](https://github.com/LogicTronixInc/KR260-DPU-TRD-Vitis-AI-3.0)).
 
-**Context, not action:** AMD announced a new "Kria AI" line (Ryzen AI Embedded X100-based,
+AMD announced a new "Kria AI" line (Ryzen AI Embedded X100-based,
 CPU/GPU/NPU, not FPGA/DPU) at Advancing AI 2026, shipping Q4 2026. Doesn't affect the
 already-purchased KR260 — just confirms the DPU/Zynq path is a mature, stable, no-longer-evolving
 branch. Fine for a fixed-scope senior project.
 
 ---
 
-## 2. Open architecture decision — how much of the Cube Orange+ gets replaced?
+## 2. Architecture decision — how much of the Cube Orange+ gets replaced?
 
-**This is the single biggest unresolved question and should be settled before the block
-diagram is finalized**, because it changes what has to be built. It also determines what (if
-anything) replaces the Cube's telemetry/command-link role — see §3.
+**Decision: full replacement (Option A), with the manual-override safety net kept outside the
+KR260.** The Cube Orange+ is removed entirely and no separate autopilot board replaces it. The
+KR260 does perception, navigation, and motor command generation itself. An **external PWM
+multiplexer** sits between the KR260/RC receiver and the ESCs so a human can take over with an RC
+transmitter if the autonomous system misbehaves, independent of whether the KR260 is running
+(see §13).
 
-The Cube Orange+ today isn't just a motor driver — it's a full autopilot (ArduSub/ArduPilot):
-EKF sensor fusion, closed-loop stabilization, failsafes, mode logic, MAVLink. The original plan
-was for the KR260 to replace *both* the Jetson and the Cube outright, with the Zynq PS talking
-to sensors and motors directly.
+For context, the Cube Orange+ was not just a motor driver. It was a full autopilot
+(ArduSub/ArduPilot): EKF sensor fusion, closed-loop stabilization, failsafes, mode logic, MAVLink.
+Replacing it outright means the team now owns that layer.
 
-**Option A — Full replacement.** KR260 (PS + PL + ROS2) does everything: perception, mapping,
-navigation, *and* low-level stabilization/motor mixing/failsafes, with no separate autopilot
-board. Cleanest architecture, fully consolidated on one board — but it means re-implementing,
-from scratch, safety-critical control logic that ArduPilot has spent years hardening. For an
-ASV this is more tractable than for a multirotor (heading/speed PID + waypoint following vs.
-full attitude stabilization), but it is still real control-systems + failsafe work on top of
-everything else in this doc.
+**What the KR260 takes on**
+- Heading/speed control and waypoint following (for an ASV this is heading/speed PID plus
+  waypoint logic, not full attitude stabilization).
+- Position estimation: GPS + Marvelmind fusion in `robot_localization` (§8). Heading source is
+  still open (§14).
+- Motor command generation, including left/right mixing, in a ROS2 node.
+- PWM output in the PL (PMOD J2, §6, §13.2) with a PL watchdog that forces neutral if the PS stops
+  refreshing the outputs.
+- Obstacle avoidance from YOLO on the OAK-D RGB stream and the RPLidar S2 (§4, §8).
 
-**Option B — Hybrid (recommended default).** Keep a small, cheap low-level controller (could
-be a lightweight ArduRover-class board, or even bare-metal/RTOS code on the Zynq's own RPU
-cores) doing closed-loop stabilization, motor mixing, and failsafes — mirroring the current
-Jetson↔Cube relationship, except the "Jetson" role (perception, YOLO, mapping, mission
-planning, ROS2) is now entirely absorbed into the KR260. Lower risk, reuses proven control
-logic, and still consolidates the compute-heavy stuff onto one board as intended.
+**What is not in the system:** ArduPilot, MAVLink, MAVROS, and QGroundControl-style tooling. There
+is no MAVLink-speaking autopilot left to bridge to, so §3.1's non-MAVLink path applies.
 
-**Action item:** the team needs to explicitly choose A or B — it determines whether "digital
-systems" includes writing a boat autopilot from scratch.
+**Where the safety comes from instead of the autopilot**
+- **Manual override:** the external mux plus an RC transmitter/receiver (§13.3, §13.5). It works
+  with the KR260 hung or unpowered.
+- **PL-side failsafes:** neutral outputs on reset and on a PS watchdog timeout (§13.2), and the
+  J18 hardware e-stop input (§6).
+- **Still open:** what the e-stop physically cuts once a mux is in the path, since a PWM-level stop
+  in the PL only covers the autonomous path (§13.4), and who takes control when the RC link drops
+  (§13.5).
+
+**Risk accepted:** control loops and failsafe logic that ArduPilot had hardened over years are now
+custom code, so they need real bench and on-water testing (§13.6) before the boat is trusted with
+autonomy near a bridge.
+
+**Considered and not chosen:** a hybrid (Option B) that would keep a small ArduRover-class
+low-level board, or bare-metal/RTOS code on the Zynq's R5F cores, for stabilization, motor mixing,
+and failsafes. It would have reused proven control logic and put RC/telemetry on that board at no
+memory cost to the KR260. It is retained in §3.1 and §13.3 only as a reference.
 
 ---
 
@@ -86,13 +98,14 @@ what replaces the Cube).
 **Action item:** explicitly define what replaces (a) live telemetry/monitoring and (b) manual
 override/e-stop, now that the Cube's radio is gone.
 
-### 3.1 Keeping telemetry cheap on a 4GB board — this is really an Option A/B question
+### 3.1 Keeping telemetry cheap on a 4GB board
 
 The instinct to avoid "much memory overhead" for telemetry is right, but the actual lever isn't
 which telemetry library is smallest — it's **whether the KR260 needs to run any telemetry/RC
-stack at all**, which is decided by §2:
+stack at all**. §2 decided full replacement (Option A), so the KR260 does run it, and the
+second bullet below is the path that applies. The first bullet is kept for reference only.
 
-- **If Option B (hybrid, recommended default) is chosen:** put RC input, telemetry radio, and
+- **Reference only, not chosen (Option B, hybrid):** put RC input, telemetry radio, and
   "return home" logic entirely on the small low-level controller board, exactly like the current
   Cube does today. A SiK/RFD900-class radio + ArduRover's own RC/telemetry handling costs the
   KR260 **zero** memory — it never runs on the Zynq PS at all. ArduRover also already has a
@@ -101,8 +114,8 @@ stack at all**, which is decided by §2:
   to the *GPS* home position, not a Marvelmind beacon specifically — fine if the retrieval point
   itself has clear sky view (likely, if it's a dock/bank away from the bridge), but if retrieval
   also needs to happen in a GPS-denied spot, that's the case below instead.
-- **If Option A (full replacement), or if retrieval specifically must be anchored to a
-  Marvelmind beacon** (e.g. retrieval point itself is GPS-denied): don't reach for
+- **The path that applies (Option A, full replacement; also required if retrieval must be
+  anchored to a Marvelmind beacon, e.g. the retrieval point itself is GPS-denied):** don't reach for
   MAVLink/MAVROS to build this — there's no MAVLink-speaking autopilot left to bridge to under
   Option A, and MAVROS/QGroundControl-class tooling is real weight (message-definition parsing,
   GeographicLib, a GCS-facing proxy) for a problem that doesn't need it here. Instead:
@@ -123,10 +136,9 @@ stack at all**, which is decided by §2:
     laptop (§7), this may not even be needed — worth confirming the actual operating range before
     building a second radio link.
 
-**Action item:** once §2 is decided, settle whether RC/telemetry lives entirely on the low-level
-board (Option B) or needs the lightweight SBUS + custom-node path on the KR260 (Option A /
-Marvelmind-anchored retrieval), and confirm the real-world WiFi range needed before assuming a
-second radio link is necessary.
+**Action item:** build the lightweight SBUS + custom-node path on the KR260 for the
+return-to-beacon trigger, and confirm the real-world WiFi range needed before assuming a second
+radio link is necessary.
 
 ---
 
@@ -329,7 +341,7 @@ Clarified data/control flow: **sonar (Ping2) bathymetric data is recorded in par
 position**, since a depth reading is only useful survey data once it's geotagged. **GPS also
 drives steering** (waypoint following), blended with **YOLO-based object detection** for
 reactive obstacle avoidance (pylons, rocks, riverbank) — this reactive layer is exactly the
-kind of low-level control logic that §2's Option A/B decision is about.
+kind of low-level control logic that §2 assigns to the KR260 (Option A, full replacement).
 
 **The known failure mode: GPS drops under bridges** — exactly the survey target per the SOW
 ("map the riverbed near bridge piers"), which makes this more than a driving-convenience
@@ -499,7 +511,7 @@ hardware state costs a multi-hour synth/impl run to discover — worth avoiding 
 Everything needed to turn a navigation/RC command into thrust on the water: the thrusters, their
 ESCs, the signal path from the KR260 and from an RC receiver, how control switches between them,
 and the safety behavior around it. Ties together §4 (T200/Basic ESC), §6 (PMOD J2/J18), §3 and
-§3.1 (manual override, RC), and §2 (Option A/B).
+§3.1 (manual override, RC), and §2 (decided: full replacement, external mux for manual override).
 
 ### 13.1 What's decided, and what the hardware requires
 
@@ -558,12 +570,13 @@ its manual and docs. Options that can:
 | **A. Basic ESCs + Pololu 4-channel RC servo multiplexer (recommended)** | Hardware. A spare RC channel on SEL picks master (M) or slave (S) inputs per a user-set threshold (default ~1700 µs, ±64 µs hysteresis). | ~$18 ([product](https://www.pololu.com/product/2806)) | Purpose-built for autonomous/manual override. 2.5–16 V supply, SEL accepts 0.5–2.5 ms pulses at 10–330 Hz. Failsafe is a jumper: off, master inputs take control if SEL is lost; on, outputs go low. Keeps the Basic ESCs. Works with the KR260 hung or unpowered. |
 | B. Basic ESCs + Acroname RxMux | Same idea, 8 channels, 2 sources. | ~$19 ([product](https://acroname.com/store/s56-rxmux-1)) | Defaults to input A if SEL is absent, and the vendor states it provides no failsafe or redundancy by itself. More channels than needed here. |
 | C. Mux inside the PL | Logic in the KR260's fabric selects between the decoded RC signal and the autonomous PWM. | No hardware cost | Extends the J18 e-stop gating design. Loses manual control if the KR260 loses power or the PL is unconfigured, which is exactly when a manual override matters. Acceptable only if the KR260 is trusted to stay up. |
-| D. Option B hybrid low-level board (§2) | Native to the flight-controller firmware (ArduRover RC passthrough and mode arbitration). | Depends on board | No separate mux needed and no PL PWM work. Outputs PWM to the ESCs directly. Only applicable if §2 chooses B. |
+| D. Option B hybrid low-level board (§2) | Native to the flight-controller firmware (ArduRover RC passthrough and mode arbitration). | Depends on board | No separate mux needed and no PL PWM work. **Not applicable:** §2 chose full replacement with an external mux. Kept for reference. |
 | E. VESC-class ESCs | Firmware supports combined PPM+UART control ([Flipsky](https://flipsky.net/blogs/vesc-tool/vx4-three-control-mode-ppm-uart-ppm-and-uart)). | Varies | Which input wins when both are active was not found documented, and T200 compatibility with VESC is unconfirmed. Not recommended without a bench test. |
 | F. Roboteq BLDC controllers | RC, serial and CAN inputs. | High | Sized for much larger motors than a T200. Input-priority behavior not verified. Overkill here. |
 
-**Recommendation: Option A**, unless §2 selects the hybrid architecture, in which case D removes
-the need for it. **Not yet verified on hardware:** that the Pololu mux passes 1100–1900 µs pulses
+**Decision context:** §2 chose full replacement with an external mux for manual override, which is
+this section's Option A (the Pololu mux; not the same "Option A" as in §2). **Not yet verified on
+hardware:** that the Pololu mux passes 1100–1900 µs pulses
 through unchanged (its page doesn't say so explicitly) and that it accepts the KR260's 3.3 V PWM.
 Bench-test both with a scope before wiring the boat.
 
@@ -628,7 +641,8 @@ up to a second before the KR260 takes over.
 - [ ] On-water check of thrust against river current (§14 item; inherited assumption).
 
 **Action items:**
-- [ ] Choose the switching option (§13.3), pending the Option A/B decision in §2.
+- [ ] Confirm the mux product (§13.3): Pololu 4-channel is the current recommendation, since §2
+      is decided as an external mux.
 - [ ] Decide what the e-stop cuts and where (§13.4).
 - [ ] Confirm the RC pair (§13.5, recommended Pocket ELRS + ER8): check EdgeTX tank mixing and
       range, set per-channel failsafe (SEL above ~1700 µs if the KR260 should take over on link
@@ -639,14 +653,14 @@ up to a second before the KR260 takes over.
 
 ## 14. Open questions / action items
 
-- [ ] **Choose the thruster switching option and e-stop design (§13)**: mux vs. hybrid board,
-      and what the e-stop physically cuts.
-- [ ] **Decide Option A vs. B (§2)** — full autopilot replacement vs. keep a lightweight
-      low-level controller.
-- [ ] **Define the telemetry/command-link replacement (§3)** — specifically, confirm what
-      provides manual override/e-stop now that the Cube's radio is gone, and settle whether
-      RC/telemetry lives on a low-level board (Option B) or on the KR260 via SBUS + a custom node
-      (§3.1) — depends on the Option A/B decision above.
+- [x] ~~Decide Option A vs. B (§2)~~ — **decided: full replacement of the Cube, with an external
+      PWM mux for manual override** (§2, §13). The KR260 now owns navigation, motor mixing, and
+      PL-side failsafes.
+- [ ] **Finalize the e-stop design (§13.4)**: what it physically cuts now that a mux is in the
+      path, and who takes control when the RC link drops (§13.5).
+- [ ] **Define the telemetry/command-link replacement (§3)**: manual override is settled (mux +
+      RC); still open is live telemetry beyond WiFi range and the SBUS + custom-node
+      return-to-beacon trigger on the KR260 (§3.1).
 - [x] ~~Identify the current GPS module~~ — confirmed **Here 3+ (DroneCAN, Cube-specific)**;
       **recommend replacing** with a plain USB/UART GNSS module (§4). **Action item:** purchase
       and confirm.
@@ -670,9 +684,9 @@ up to a second before the KR260 takes over.
       limitation** for outdoor river use (§4). **Recommendation: replace with RPLidar S2**
       ($399, 80klux sunlight-rated, same USB integration path). **Action item:** purchase and
       confirm.
-- [ ] Design the RC-triggered "return to beacon" behavior (§3.1) once §2 is decided — either as
-      an ArduRover-native RTL (Option B) or a custom SBUS-triggered ROS2 node using the fused
-      `robot_localization` position estimate (Option A / Marvelmind-anchored retrieval).
+- [ ] Design the RC-triggered "return to beacon" behavior (§3.1) as a custom SBUS-triggered ROS2
+      node using the fused `robot_localization` position estimate (Marvelmind-anchored
+      retrieval). ArduRover's native RTL is not available with the Cube gone.
 - [ ] **Sign off on the physical port assignment (§6) as a team** — especially the USB1 hub
       absorbing 4 of the 5 USB-hungry sensors (the 5-sensors-vs-4-ports constraint) — and buy the
       powered USB hub it depends on. Also confirm the RPLidar S2 adapter's scan-motor behavior; the
