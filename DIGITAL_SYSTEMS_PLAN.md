@@ -441,9 +441,13 @@ fits."
   constant regardless of how often you run it. Worth keeping this distinction straight: framerate
   reduction solves a different problem than the 4GB ceiling does.
 
-**Action item:** build an actual rough memory budget (OS/ROS2 baseline + per-node estimate + DPU
-model+buffer footprint for the chosen YOLO variant/B-size + camera/LiDAR buffers) once the model
-and DPU size are chosen — before assuming it'll fit.
+**Confirmed on the board:** the boot command line reserves `cma=1000M` — 1GB of the 4GB pool set
+aside as contiguous memory for the DPU's buffers (§15.3). That's a real, checked number to start
+the budget from, not an estimate.
+
+**Action item:** build an actual rough memory budget (OS/ROS2 baseline + per-node estimate + the
+1GB CMA reservation, revised if it's resized + camera/LiDAR buffers) once the model and DPU size
+are chosen — before assuming it'll fit.
 
 ---
 
@@ -704,6 +708,207 @@ up to a second before the KR260 takes over.
 
 ---
 
+## 15. Full system architecture and how Linux/ROS talks to the PL
+
+This section is the system-level view the design review asks for: what the robot is made of, how
+the pieces connect, and, in detail, how Linux and ROS2 communicate with the programmable logic (PL)
+on the KR260. Facts about the KR260 image below were checked directly on the board (kernel
+5.15.0-1027-xilinx-zynqmp, Kria Ubuntu 22.04). Register maps and behaviors marked "proposed" are
+design proposals, not existing IP.
+
+### 15.1 Robot subsystems
+
+| Subsystem | Contents | Where it's documented / status |
+|---|---|---|
+| Hull and mechanical | Boogie-board hull, waterproof boxes, reused 3D-printed brackets, 3D-printed camera chassis with anti-reflective glass panel and hydrophobic coating | §5 (camera enclosure). Hull, mounting, cable penetrators, and thermal layout are not covered in this doc. |
+| Power | Battery, distribution, fusing, regulation for the KR260/USB hub/sensors, thruster supply | Carried over from the original boat and not documented here. See 15.9 for what this plan needs from it. |
+| Propulsion | 2× T200 + Basic ESC, PWM multiplexer, RC receiver | §13 |
+| Sensing | Ping2, RPLidar S2, Marvelmind, GPS, OAK-D camera, heading source (open) | §4, §6, §8 |
+| Compute | KR260: PS (Linux, ROS2) + PL (DPU, thruster block) | §1, §10, §11, this section |
+| Communications | WiFi/SSH from a lab laptop; 2.4 GHz RC link | §3, §7, §13.5 |
+| Safety | External mux + RC override, PL watchdog, hardware e-stop, RC failsafe | §2, §13.4, 15.6 |
+
+### 15.2 System block diagram
+
+```
+                              +------------------------ KR260 -------------------------+
+  USB hub --> Ping2           |  PS (Linux + ROS2)                 PL (one bitstream)   |
+          --> RPLidar S2      |  +------------------------+       +------------------+  |
+          --> Marvelmind      |  | sensor driver nodes    |       | DPU (YOLO)       |  |
+          --> GPS             |  | robot_localization     |<-AXI->|  AXI-Lite ctrl   |  |
+  USB0    --> OAK-D camera    |  | nav / mission / avoid  |  HP   |  AXI HP -> DDR   |  |
+                              |  | dpu_detector (VART)    |       +------------------+  |
+                              |  | motor_mixer            |       | Thruster block   |  |
+                              |  | thruster_driver (UIO)  |<-AXI->|  regs, 2x PWM,   |  |
+                              |  +------------------------+ Lite  |  watchdog,e-stop |  |
+                              |                                   +--------+---------+  |
+                              +--------------------------------------------|------------+
+                                        PMOD J2 (2x PWM) <-----------------+   ^ PMOD J18
+                                               |                                | e-stop in
+   RC receiver (2x thrust PWM + SEL) --> +-----v-------+                        |
+   RC transmitter ~~ 2.4 GHz link ~~     | PWM mux     |--> Basic ESC x2 --> T200 x2
+                                         | (external)  |
+                                         +-------------+
+```
+
+The mux sits outside the KR260. With SEL on manual, the RC receiver drives the ESCs directly and
+the KR260 has no influence on the thrusters. With SEL on autonomous, the PL's PWM outputs drive
+them.
+
+### 15.3 How the PS talks to the PL
+
+There are two separate paths, and they use different mechanisms.
+
+**Path 1: thruster block (control and status registers)**
+- **Hardware link:** an AXI4-Lite slave in the PL, reached from an AXI master port on the PS (for
+  example HPM0_LPD, which tutorial 2 enables). It is a small block of 32-bit registers.
+- **Linux mechanism: UIO.** The PL block appears as a device-tree node with
+  `compatible = "generic-uio"` and a `reg` range, and Linux exposes it as `/dev/uioN`. A ROS2 C++
+  node `mmap`s that device and reads and writes registers. **The board is already set up for this:**
+  its kernel command line contains `uio_pdrv_genirq.of_id=generic-uio`, and the `uio_pdrv_genirq`
+  module is available.
+- **Why not `/dev/mem`:** the kernel has `CONFIG_STRICT_DEVMEM=y`, which restricts it, and UIO
+  gives a scoped mapping plus a standard interrupt path.
+- **Why not a kernel PWM driver:** the kernel config has no Xilinx PWM driver, so a custom
+  register block is the practical route. A small kernel driver could replace UIO later if wanted.
+- **Interrupts (optional):** a PL-to-PS interrupt (for example on watchdog trip or e-stop) can be
+  delivered through UIO. Polling the status register at 10-20 Hz is enough to start.
+- **AXI GPIO** would also work natively (`CONFIG_GPIO_XILINX=y`, appears as a gpiochip), but the
+  thruster block already carries its own status bits, so GPIO IP is not needed.
+
+**Path 2: DPU (inference)**
+- **Hardware link:** the DPU has an AXI-Lite control port and AXI master ports to DDR through the
+  PS high-performance ports (§11). Weights, activations, and image buffers live in DDR.
+- **Linux mechanism: XRT + `zocl`.** The image ships the `zocl` kernel module and XRT, so it
+  uses the Vitis flow (an `.xclbin` loaded through XRT). **The in-kernel Xilinx DPU driver is not
+  built** (`CONFIG_XILINX_DPU` is not set and no `dpu` module exists). That means the Vivado-flow
+  DPU of the LogicTronix tutorial would need an out-of-tree kernel module. The Vitis flow of
+  tutorial 2 matches this image.
+- **Software:** a C++ ROS2 node uses VART (Vitis AI runtime). Getting VART onto Kria Ubuntu without
+  PYNQ is still unverified (see 15.10).
+- **DDR buffers:** the boot command line reserves `cma=1000M` of contiguous memory. Contiguous
+  buffers for the DPU come from there. That is 1 GB of the 4 GB pool, so it belongs in the §10
+  memory budget. CMA memory can be lent to movable allocations, so it isn't fully idle, but it
+  is not a free 1 GB either.
+
+### 15.4 Loading the PL and boot sequence
+
+- **One bitstream** contains both the DPU and the thruster block, packaged as a Kria firmware app:
+  `.bit` to `.bit.bin`, the device-tree source to `.dtbo`, plus a `shell.json`, and the `.xclbin`
+  for the DPU. These are installed under `/lib/firmware/xilinx/<app-name>/`. AMD's
+  [custom firmware guide](https://xilinx.github.io/kria-apps-docs/kr260/build/html/docs/generating_custom_firmware.html)
+  describes this with a makefile in `kria-apps-firmware`. The `shell.json` contents are not
+  covered there and are unverified here.
+- **Loading:** `xmutil unloadapp` then `xmutil loadapp <app-name>`. On the board today,
+  `xmutil listapps` shows only the default `k26-starter-kits`, so the custom app must be created.
+- **Automation:** a systemd oneshot unit runs the load before the ROS2 launch starts.
+- **Safe state during boot:** until the bitstream loads, the PMOD pins are not driven. The mux
+  must therefore default to **manual (RC)** so the ESCs see the receiver's neutral, not a floating
+  line. Verify the Pololu SEL default and failsafe jumper (§13.3), and never leave SEL on
+  autonomous while reloading the bitstream.
+
+### 15.5 Thruster block (proposed register map)
+
+Custom PL block, AXI4-Lite, 32-bit registers, offsets from the block's base address:
+
+| Offset | Name | Access | Function |
+|---|---|---|---|
+| 0x00 | ID / VERSION | RO | Fixed ID and version, to confirm the right bitstream is loaded |
+| 0x04 | CTRL | RW | Bit 0: ENABLE autonomous outputs. Bit 1: CLEAR_FAULT (write 1 to re-arm after a watchdog trip). Bit 2: SOFT_ESTOP. |
+| 0x08 | STATUS | RO | Output enabled, watchdog tripped, hardware e-stop input active |
+| 0x0C | PWM_L_US | RW | Left pulse width in µs. Default 1500. |
+| 0x10 | PWM_R_US | RW | Right pulse width in µs. Default 1500. |
+| 0x14 | WD_TIMEOUT_MS | RW | Watchdog timeout. Default 200. |
+| 0x18 | HEARTBEAT | WO | Any write refreshes the watchdog |
+| 0x1C / 0x20 | PWM_L/R_ACTUAL | RO | Pulse width actually being driven after gating |
+
+Hardware rules that do not depend on software:
+- Pulse widths are **clamped to 1100-1900 µs in the PL**, whatever software writes.
+- Outputs are **1500 µs (neutral) at reset**, never 0.
+- On a watchdog trip, both outputs go to neutral and stay there until software writes CLEAR_FAULT.
+  A restart does not silently resume thrust.
+- The J18 e-stop input forces neutral in the PL (the autonomous path only, see §13.4).
+- **Optional:** wiring the RC receiver's SEL line to a PL input as well would let the block
+  measure it and report which source is live. That helps logging and stops the autonomous
+  controller winding up while a human is driving. It is not required for safety.
+
+Frame timing: the PL generates a 50 Hz frame with 1 µs pulse resolution, independent of Linux
+scheduling. Software only updates the target values.
+
+### 15.6 Failure behavior
+
+| Event | What happens | Who is in control |
+|---|---|---|
+| ROS2 node crash or Linux hang | Heartbeat stops, watchdog trips, autonomous outputs go to neutral | Pilot can flip SEL to manual |
+| Upstream navigation stops sending commands | `thruster_driver` stops refreshing the heartbeat (see 15.7), same as above | Pilot |
+| KR260 loses power | PL outputs are undriven. What the Basic ESC does on signal loss is **unverified**; test it. | Pilot must already be on manual, or flip to it |
+| RC link lost | Receiver sets SEL and thrust channels to their configured failsafe values (§13.5) | Per failsafe setting |
+| E-stop pressed | PL forces neutral on the autonomous path. Power cut is still to be decided (§13.4). | Depends on §13.4 |
+| Boot or bitstream reload | PMOD pins undriven until load completes | Mux defaults to manual (15.4) |
+
+### 15.7 ROS2 software architecture
+
+| Node | Runs | Inputs | Outputs |
+|---|---|---|---|
+| Sensor drivers: `rplidar_ros`, `depthai-ros`, Ping2, `marvelmind_ros2`, `nmea_navsat_driver`, heading (TBD) | PS | USB devices | `/scan`, camera images and depth, sonar depth, Marvelmind position, `/fix`, IMU |
+| `robot_localization` | PS | GPS, Marvelmind, IMU | Fused pose and odometry (§8) |
+| `dpu_detector` (C++, VART) | PS + DPU | Camera RGB | Detections (e.g. `vision_msgs`) |
+| Obstacle avoidance | PS | Detections, `/scan`, depth | Adjusted velocity request |
+| `mission_manager` | PS | Fused pose, waypoints, RC channels | Survey / hold / return-to-beacon commands |
+| `sbus_serial` | PS | ER8 serial output | RC channels (return-to-beacon trigger, §3.1) |
+| `motor_mixer` | PS | Speed and yaw request | Left/right thrust, -1 to 1 |
+| `thruster_driver` (C++, UIO) | PS to PL | Left/right thrust | PL registers; publishes thruster status (actual µs, watchdog, e-stop) |
+| `rosbag2` | PS | Sonar, position, status | Geotagged survey log |
+
+Data flow: sensors, then `robot_localization`, then mission/avoidance, then `motor_mixer`, then
+`thruster_driver`, then PL registers, then PWM, then the mux, then the ESCs. Camera to
+`dpu_detector` to avoidance.
+
+**Heartbeat rule (proposed):** `thruster_driver` refreshes the heartbeat only when it has received
+a fresh command within a set window, not from an independent timer. A stuck or dead upstream node
+then trips the watchdog as well, not just a dead driver.
+
+**Rates (proposed starting points):** control loop 20-50 Hz; watchdog 200 ms (about 10 missed
+updates at 50 Hz); DPU inference at whatever the chosen model sustains.
+
+### 15.8 Bring-up order
+
+1. **Spike A, PS-PL path only:** a minimal PL design with just the thruster block, packaged as a
+   firmware app, loaded with `xmutil`, mapped through UIO from a C++ program, with the PWM outputs
+   checked on a scope. This proves the device tree, UIO, and packaging without the DPU.
+2. **Spike B, DPU only:** a Vitis-flow DPU `.xclbin` loaded on Kria Ubuntu without PYNQ, running a
+   small model through VART.
+3. **Merge:** one bitstream with both. Check timing, resource use, and DDR bandwidth (§10, §11).
+4. **ROS2 integration:** the nodes in 15.7, then the mux and ESC bench tests (§13.6).
+
+Spikes A and B are independent and can run in parallel between teammates.
+
+### 15.9 What the whole-robot plan still needs from other subsystems
+
+- **Power:** battery voltage and capacity, distribution diagram, fusing, the KR260 and USB hub
+  supply, the thruster supply and its peak current (§13.1), and whether an e-stop contactor is in
+  the thruster supply (§13.4).
+- **Mechanical:** enclosure layout, cable penetrators, and thermal design. The KR260 has a fan
+  (checked earlier, driven at a low duty cycle), so in a sealed box the heat has to reach the
+  hull or air. That needs a plan.
+- **Test plan:** on-water tests of thrust in current, the mux and failsafe behavior, and
+  survey-data quality.
+
+### 15.10 Open items from this section
+
+- [ ] Confirm the Vitis-flow `.xclbin` DPU loads and runs through `xmutil` + XRT + `zocl` on Kria
+      Ubuntu without PYNQ (Spike B).
+- [ ] Find out how to install VART / the Vitis AI runtime on Kria Ubuntu 22.04 without PYNQ.
+- [ ] Prove the UIO register path with a minimal firmware app (Spike A), including the `shell.json`
+      and DTBO details.
+- [ ] Decide the PMOD pin mapping for the PWM, e-stop, and (optionally) SEL monitoring, against the
+      KR260 pinout.
+- [ ] Verify what the Basic ESC does when its signal disappears (KR260 power loss case).
+- [ ] Decide whether to shrink `cma=1000M` and fold the result into the §10 memory budget.
+- [ ] Get the power and mechanical inputs listed in 15.9.
+
+---
+
 ## References
 
 - [KR260 DPU-TRD Vivado-flow tutorial (Vitis AI 3.0), LogicTronix/Hackster](https://www.hackster.io/LogicTronix/kria-kr260-dpu-trd-vivado-flow-vitis-ai-3-0-tutorial-0085fd)
@@ -711,6 +916,7 @@ up to a second before the KR260 takes over.
 - [Vitis AI 3.5 IP and Tool Version Compatibility](https://xilinx.github.io/Vitis-AI/3.5/html/docs/reference/version_compatibility.html)
 - [Pruning YOLOv3 and deploying with Vitis AI on a Kria board](https://www.hackster.io/LogicTronix/pruning-yolov3-and-deploying-with-vitis-ai-on-kria-kv260-de654a)
 - [Xilinx/KRS repo](https://github.com/Xilinx/KRS)
+- [Kria custom firmware app guide (xmutil/dfx-mgr, kria-apps-firmware)](https://xilinx.github.io/kria-apps-docs/kr260/build/html/docs/generating_custom_firmware.html)
 - [Kria SmartCamera AI customization docs](https://xilinx.github.io/kria-apps-docs/creating_applications/2022.1/build/html/docs/AI_customization.html)
 - [AMD Kria AI / Robotics Developer Platform announcement, Advancing AI 2026](https://newsroom.amd.com/news/aai-2026-kria-robotics-dev-platform/)
 - [BlueRobotics Ping Sonar Technical Guide](https://bluerobotics.com/learn/ping-sonar-technical-guide/)
