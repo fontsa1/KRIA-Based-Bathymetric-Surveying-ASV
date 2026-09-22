@@ -95,8 +95,14 @@ same link carrying everything else (a physical/RF-based independent kill switch 
 answer, separate from the main comms link, and is likely a safety requirement regardless of
 what replaces the Cube).
 
-**Action item:** explicitly define what replaces (a) live telemetry/monitoring and (b) manual
-override/e-stop, now that the Cube's radio is gone.
+**Manual override/e-stop: answered.** The RC receiver's PWM outputs drive the external mux
+directly (§13.2, §13.3) — with SEL on manual, the receiver has sole control of the ESCs and the
+KR260's state is irrelevant. This satisfies "a way to manually stop/override the boat that doesn't
+depend on the same link carrying everything else": the RC link is physically independent of
+WiFi/SSH.
+
+**Action item:** live telemetry/monitoring (watching the boat's status, not controlling it) is
+still open — see §3.1's last bullet on whether a second radio link beyond WiFi range is needed.
 
 ### 3.1 Keeping telemetry cheap on a 4GB board
 
@@ -194,6 +200,22 @@ straightforward, low-risk default.
 | Luxonis OAK-D Pro / Pro W | USB3 | $429 / $529 | Adds active IR illumination for low-light depth — probably unnecessary for daytime river surveying. |
 | Allied Vision Alvium 1500-C (MIPI CSI-2) | MIPI CSI-2 | $277–$477 depending on sensor/resolution | Confirmed compatible with **KV260** via a dedicated adapter board — compatibility with **KR260**'s different carrier/connector is unverified, and this is a single 2D sensor (no depth without a stereo pair + your own algorithm). |
 | FRAMOS FSM-IMX547 (SLVS-EC) | SLVS-EC (KR260-native) | Quote-only, not public | The "true PL ingestion" reference path for KR260 specifically — monochrome, industrial-grade, higher effort/cost. |
+| Hiwonder/Deptrum Aurora930 Pro | **USB 2.0** | Not found | Considered, **not recommended** — see below. |
+
+**Aurora930 Pro, checked against the team's question — not recommended over the OAK-D.** A
+structured-light depth camera (active IR pattern projection + an onboard ASIC depth chip), not a
+stereo camera like the OAK-D. Two concerns, checked directly against Hiwonder's own docs:
+- **Depth range is only 0.3–3 m.** Shorter than the OAK-D's already-short effective stereo range
+  (§ above), which matters more here since it's the camera actually being bought for depth.
+- **Structured light is the category of depth sensing that struggles most in direct sunlight** —
+  the projected IR pattern gets washed out by ambient IR, which is the textbook reason devices
+  like the Kinect don't work outdoors. Hiwonder's spec lists "Operating Illumination: 3~80,000
+  Lux," but their own docs don't say whether that's for RGB image quality or for depth accuracy
+  specifically — unverified, and it's the exact question that matters for a boat in direct
+  sunlight on open water.
+- In its favor: USB 2.0 (lighter on the port budget than the OAK-D's USB3, §6), explicit ROS1/ROS2
+  support, and low power (<1.6 W). Not enough to outweigh the range and outdoor-depth concerns for
+  this application. Keeping the OAK-D decision below.
 
 **Decision: Luxonis OAK-D family over USB3.** Chosen for stereo depth plus a good RGB camera at a
 reasonable price. Treat SLVS-EC/PL-native ingestion as a stretch goal only if CPU load or latency
@@ -292,96 +314,106 @@ J21 could technically fit it.
 
 ---
 
-## 7. Development environment & remote access
+## 7. Development environment & remote access — decided, working
 
-Current setup: KR260 configured as a desktop (monitor + keyboard/mouse) for ROS2 development —
-a reasonable default for bring-up. Worth planning explicitly for headless/remote operation too,
-since the boat obviously won't have a monitor attached in the field, and remote access from
-home is now part of the plan.
+**Decided and working:** the KR260 has a static IP on the PS-native Ethernet port and is reached
+directly via SSH — no monitor/keyboard, no relay laptop. The board also boots headless by default
+(`multi-user.target`, no GNOME/desktop running) after the fresh Ubuntu 22.04 install and package
+trim. The earlier plan in this section (SSH into a lab laptop that relays to the board) was the
+speculative option; what actually got built is simpler — SSH straight to the board's static IP
+whenever it's reachable on the network.
 
-**Plan:** static IP on the board, reachable from a lab laptop that stays on-site; SSH from home
-into that laptop, then from the laptop into the board. Structurally this is sound — only the
-laptop's own remote-in path crosses the public internet (whatever your institution's
-VPN/remote-access solution already is), so the board itself never needs to be internet-facing,
-just reachable on the lab LAN.
-
-Two things worth getting right before configuring it:
-- **Use the PS-native Ethernet port, not the PL-routed one.** KR260 exposes two physical
-  Ethernet jacks, and earlier research on this board's connectors found one of them (J10) is
-  routed through PL rather than the PS's hardened GEM controller (likely there for TSN/deterministic
-  networking use cases, not general use). A PL-routed interface won't behave like a normal Linux
-  NIC until PL is actually built with a driver/device-tree entry for it. Confirm which physical
-  jack maps to the PS-native controller (it should already show up and work in Ubuntu with zero
-  Vivado work — check with `ip link` / `ethtool`) and use that one for the static IP.
-- **Check with lab/campus IT before hand-picking an address.** If the lab network is centrally
-  managed (DHCP-controlled, possibly a monitored VLAN), manually configuring an arbitrary static
-  IP client-side risks a conflict with another device or getting flagged. The more robust
-  equivalent — same practical result, the board always answers at the same address — is asking
-  IT for a **DHCP reservation** bound to the board's MAC address, rather than hard-configuring a
-  static IP on the board itself. Worth a quick check before assuming either approach.
-
-Once the address is settled: configure it via netplan (`/etc/netplan/*.yaml` on Ubuntu 22.04),
-and use SSH keys rather than password auth for the laptop↔board hop, since this will be a
-routine path. One practical footnote: the lab laptop being always-on and reachable is now a
-dependency of home access to the board — worth disabling its sleep and setting SSH to start on
-boot there.
+**Confirmed along the way:**
+- The board's PS-native Ethernet port (not the PL-routed one) is the one that came up as `eth0`
+  in Ubuntu with zero Vivado work, exactly as expected — the PL-routed second jack (`eth1`) stays
+  down, which is correct and not an error.
+- The board's address has changed once already when it was physically moved to a different part
+  of the network — worth remembering that "static" here means "fixed within its current subnet,"
+  not "fixed forever regardless of where it's plugged in." Re-check with `ip a` after any physical
+  move.
 
 **Action items:**
-- [ ] Confirm which physical Ethernet jack is PS-native vs. PL-routed before configuring
-      anything (`ip link` / `ethtool` on the board).
-- [ ] Check with lab/campus IT: hand-set static IP vs. DHCP reservation.
-- [ ] Set up SSH keys for the laptop↔board hop; disable sleep and enable SSH-on-boot on the
-      lab laptop.
+- [ ] Set up SSH keys in place of password auth, now that this is the daily-driver path.
+- [ ] Decide if a DHCP reservation (bound to the board's MAC) is worth asking lab/campus IT for,
+      so the address survives a network move automatically — optional, since re-checking the
+      address after a move is a one-line fix.
 
 ---
 
 ## 8. Navigation & data collection architecture
 
-Clarified data/control flow: **sonar (Ping2) bathymetric data is recorded in parallel with GPS
-position**, since a depth reading is only useful survey data once it's geotagged. **GPS also
-drives steering** (waypoint following), blended with **YOLO-based object detection** for
-reactive obstacle avoidance (pylons, rocks, riverbank) — this reactive layer is exactly the
-kind of low-level control logic that §2 assigns to the KR260 (Option A, full replacement).
+Clarified data/control flow: **sonar (Ping2) bathymetric data is recorded in parallel with
+position**, since a depth reading is only useful survey data once it's geotagged. Position also
+drives steering (waypoint following), blended with **YOLO-based object detection** for reactive
+obstacle avoidance (pylons, rocks, riverbank) — this reactive layer is exactly the kind of
+low-level control logic that §2 assigns to the KR260 (Option A, full replacement).
 
-**The known failure mode: GPS drops under bridges** — exactly the survey target per the SOW
-("map the riverbed near bridge piers"), which makes this more than a driving-convenience
-problem: if position is unknown while passing under a bridge, the bathymetric data collected
-in the most important segment of the whole mission is unusable. The planned fix is the
-**Marvelmind beacon system**: beacons placed on the riverbanks bracketing a bridge, with the
-boat-mounted hedgehog producing a local position fix referenced to those beacons — effectively
-synthetic GPS for exactly the GPS-denied segment.
+### 8.1 Live navigation source: Marvelmind-only, GPS only to georeference — with a real caveat
 
-This is a sensor-fusion problem, not just a "swap sources" problem — the boat needs to blend
-GPS (open river) and Marvelmind-derived position (under/near bridges) into one continuous
-position estimate, ideally handled by ROS2's standard
+**The team's proposal:** GPS only establishes the Marvelmind beacons' absolute position once
+(georeferencing), and the boat never uses GPS live for its own position — it navigates purely off
+Marvelmind the whole time.
+
+**Partly right, but there's a coverage catch worth checking before committing to it.**
+Marvelmind's beacon-to-beacon range for actual position triangulation (the "submap" range) is
+**about 30 m** — this is a different, much shorter number than the ~100–400 m figures Marvelmind
+quotes for radio range, which is just the data link and doesn't mean positioning works at that
+distance. Submaps can be chained to cover longer routes (Marvelmind cites setups spanning hundreds
+of meters), but that means **a beacon roughly every 30 m along the entire route**, not just
+bracketing a bridge.
+
+- **If the survey area really is one bridge crossing** (river width plus a modest approach on
+  each side), Marvelmind-only is plausible — that might be only a handful of beacons, and it
+  removes GPS as a live dependency entirely, which is a genuine simplification (one less sensor in
+  the real-time fusion loop, §4's GPS row becomes a one-time-use tool rather than a running
+  sensor).
+- **If the survey covers longer stretches of open river between bridges**, Marvelmind-only means
+  buying, mounting, powering, and individually GPS-surveying a beacon every ~30 m for the whole
+  route — a much larger infrastructure commitment than the original plan (GPS for the open-water
+  majority, Marvelmind only bracketing each bridge).
+
+**Action item — this is the actual decision to make:** get the real extent of the survey area
+from the SOW/professor. If it's bridge-crossing-scale, go Marvelmind-only as proposed. If it's
+longer open-river stretches, keep GPS live for open water and reserve Marvelmind for the
+bridge-denial pockets (the original §8 plan, kept below as the fallback).
+
+### 8.2 If GPS stays live: fusion architecture (fallback, if 8.1 needs it)
+
+If any segment still needs GPS live, this is a sensor-fusion problem, not just a "swap sources"
+problem — the boat needs to blend GPS (open river) and Marvelmind-derived position (under/near
+bridges) into one continuous position estimate, ideally handled by ROS2's standard
 [`robot_localization`](https://github.com/cra-ros-pkg/robot_localization) package (EKF/UKF
-fusion, with `navsat_transform` for GPS specifically) rather than hand-rolled blending logic.
+fusion, with `navsat_transform` for GPS specifically) rather than hand-rolled blending logic. If
+8.1 lands on Marvelmind-only, `robot_localization` is still worth using, just fusing Marvelmind
+plus the heading source (§14) rather than GPS plus Marvelmind.
 
 Marvelmind does publish official ROS2 packages
 ([marvelmind_ros2_upstream](https://github.com/MarvelmindRobotics/marvelmind_ros2_upstream) +
 `marvelmind_ros2_msgs_upstream`), which is good — but last pushed **November 2022**, so treat
 it as a starting point that may need porting/patching for current ROS2 Humble rather than a
-guaranteed drop-in.
+guaranteed drop-in. This applies either way §8.1 lands.
 
 **Action items:**
+- [ ] Get the survey area's real extent (§8.1) — this decides Marvelmind-only vs. GPS+Marvelmind
+      fusion.
 - [ ] Confirm the Marvelmind ROS2 package builds and runs cleanly on ROS2 Humble; budget time to
       patch it if not.
-- [ ] Design the GPS↔Marvelmind fusion/handoff explicitly (likely `robot_localization`) rather
-      than leaving it implicit.
-- [ ] Decide how the YOLO-avoidance layer and GPS/Marvelmind waypoint-following layer arbitrate
-      (ties to §2).
+- [ ] If GPS stays live anywhere, design the GPS↔Marvelmind fusion/handoff explicitly
+      (`robot_localization`) rather than leaving it implicit.
+- [ ] Decide how the YOLO-avoidance layer and the waypoint-following layer arbitrate (ties to §2).
 
 ---
 
 ## 9. Reuse research — previous team's code and datasets
 
-**ROS2 code**: the Jetson/Cube team already used ROS2 Humble, and since this team is also on
-Humble (§1), their Linux-side sensor integration nodes (at minimum: Ping2, RPLidar, Marvelmind,
-GPS drivers) are plausible direct or near-direct reuse candidates — much lower risk than writing
-these from scratch. **Action item:** get access to their repo(s) before starting any Linux-side
-sensor driver work.
+**ROS2 code: decided not to reuse.** The previous team's ROS2 Humble Linux-side nodes were a
+plausible reuse candidate on paper (§1 matches their ROS2 distro), but the team's assessment,
+having looked at it, is that it's not worth the archaeology: it's disorganized and much of it is
+built around the Cube (which §2 removes entirely), so a large fraction wouldn't apply anyway.
+**Decision: write the ROS2 stack from scratch**, informed by this doc's node list (§15.7) rather
+than by porting their code.
 
-**Training dataset**: earlier assumption in this doc was that a custom river/bridge dataset
+**Training dataset: still worth getting.** Earlier assumption in this doc was that a custom river/bridge dataset
 would need to be collected from scratch. Correction: the previous team reportedly already found
 free public datasets that showed strong fidelity when tested on local rivers — if their specific
 sources still work, this removes a major long-pole item. **Action item:** get the specific
@@ -463,8 +495,16 @@ rough bandwidth budget before finalizing the Vivado block design.
 ## 12. Collaboration workflow (source control across a two-person team)
 
 **Decision: adopting the git-based approach below for Vivado/PetaLinux/Vitis source control.**
-NAS use (datasets, full project backups, and the artifact shelf described below) is still being
-scoped.
+**A shared NAS was considered and dropped** — not worth the setup/maintenance effort for a
+two-person team. Backups instead: each person backs up their own working copy to their own home
+network whenever they're off-site with their laptop (informal, personal responsibility, not a
+shared team resource). Bulky binary artifacts that used to be pointed at the NAS (`.xsa` hardware
+platforms, `.bit`/boot images, `.xmodel` files, raw training datasets, full project backups) now
+just live in each person's own backup, not in a shared, always-available location. **Consequence
+worth flagging:** without a shared drop point, handing a teammate a large build artifact means
+sending it directly (or re-generating it from git, which is the point of the git strategy below)
+rather than pointing them at a shared path — fine for two people, worth revisiting if the team
+grows.
 
 Past pain point: committing/copying the **live** Vivado and PetaLinux project directories
 wholesale — both regenerate huge binary trees on every build (`.runs/`, `.cache/`, `.sim/`,
@@ -487,17 +527,6 @@ everything else as disposable.
 - **Vitis (Unified IDE)** — ignore `Debug/`, `Release/`, `.metadata/`; track `vitis-comp.json`,
   linker scripts, app/driver sources.
 - **ROS2** — standard colcon convention: track `src/`, ignore `build/`, `install/`, `log/`.
-
-**NAS — good for a shared artifact shelf and backups, not a live working copy.** Use it to drop
-exported `.xsa` hardware platforms, `.bit`/boot images, quantized `.xmodel` files, raw training
-datasets, and **full project backups** — legitimately binary/bulky, too big for (or simply not
-meant for) git history, needs to move between people or just be safely archived without living
-in version control. **Don't** point both partners'
-actual Vivado project directory at the same NAS path as a live working copy: Vivado has no real
-file-locking, so concurrent open/write from two machines risks silent corruption with no
-diff/rollback to recover from, and synth/implementation (disk-I/O heavy) run measurably slower
-over a network share than local SSD. Keep each person's working copy local; git carries source
-sync, NAS carries the artifact drop.
 
 **Block-design concurrency is a process problem, not a tooling one.** Even as Tcl, a block
 diagram doesn't meaningfully merge — two simultaneous edits to the same top-level BD conflict in
@@ -562,6 +591,30 @@ Spare RC ch  ────────────────────►  SE
 driving is done in the transmitter or receiver (e.g. a differential/"tank" mix), since the mux
 passes two independent channels straight through. This is separate from the SBUS decode described
 in §3.1, which is a single-bit "return to beacon" trigger read by the KR260.
+
+**Implementation approach for the PL PWM core: Vitis HLS in C++, then package as an IP — this is
+standard practice, not a workaround.** Checked against AMD's own material: their
+["AXI Basics 6"](https://adaptivesupport.amd.com/s/article/1137153?language=en_US) tutorial is
+specifically about building an AXI4-Lite-controlled IP in Vitis HLS, and AMD ships a
+[Vitis Motor Control Library](https://docs.amd.com/r/2024.1-English/Vitis_Libraries/motor_control/tutorial.html)
+with PWM duty-cycle generation blocks built the same way. Nothing about this is naive; it's the
+normal path for a team more comfortable in C++ than hand-written RTL. One tradeoff worth knowing:
+a bare PWM generator (a counter compared against a threshold) is simple enough that some teams
+just write it directly as a few lines of Verilog instead of going through HLS, since HLS's
+compile-and-schedule step adds effort that a design this small doesn't strictly need. Either way
+gets to the same AXI-Lite-controlled block described below and in §15.5 — pick whichever the team
+is faster in.
+
+**Where the FSM actually lives — this is the one thing to get right.** The "FSM controlled by
+ROS" idea is correct in spirit but the FSM itself has to run **in the PL hardware that the HLS
+core generates, not in the ROS node**. Linux/ROS2 isn't a real-time OS, so anything generating the
+actual 50 Hz pulse edges from software would have jitter. The split that already matches this
+document (§15.5's proposed register map) is: the HLS-generated hardware FSM inside the PL block
+owns pulse timing, the watchdog countdown, and clamping to 1100–1900 µs, entirely in hardware; the
+ROS2 `thruster_driver` node only writes target pulse-width registers and a heartbeat over
+UIO (§15.3) — it commands the FSM, it doesn't implement it. This is exactly the "FSM controlled by
+ROS" idea, just with the boundary drawn at the register interface instead of at the pulse
+waveform.
 
 ### 13.3 Options for switching between KR260 and RC
 
@@ -662,14 +715,15 @@ up to a second before the KR260 takes over.
       PL-side failsafes.
 - [ ] **Finalize the e-stop design (§13.4)**: what it physically cuts now that a mux is in the
       path, and who takes control when the RC link drops (§13.5).
-- [ ] **Define the telemetry/command-link replacement (§3)**: manual override is settled (mux +
-      RC); still open is live telemetry beyond WiFi range and the SBUS + custom-node
-      return-to-beacon trigger on the KR260 (§3.1).
+- [x] ~~Define the manual-override path (§3)~~ — **answered: the RC receiver drives the mux
+      directly** (§13.2, §13.3), independent of the KR260. Still open: live telemetry beyond WiFi
+      range, and the SBUS + custom-node return-to-beacon trigger on the KR260 (§3.1).
 - [x] ~~Identify the current GPS module~~ — confirmed **Here 3+ (DroneCAN, Cube-specific)**;
       **recommend replacing** with a plain USB/UART GNSS module (§4). **Action item:** purchase
       and confirm.
-- [x] ~~Pick a replacement camera~~ — **Luxonis OAK-D family chosen** (§5). Still open: S2 vs.
-      Lite, fixed vs. autofocus, and a DepthAI test on the KR260.
+- [x] ~~Pick a replacement camera~~ — **Luxonis OAK-D family chosen** (§5); Aurora930 Pro
+      considered and not recommended (short 0.3–3 m depth range, structured-light outdoor-sunlight
+      risk). Still open: S2 vs. Lite, fixed vs. autofocus, and a DepthAI test on the KR260.
 - [ ] **Heading source.** The Here 3+ has a built-in compass and IMU; replacing it with a plain
       GNSS module removes both. A single GNSS receiver gives course-over-ground only, which is
       unreliable at low speed in current. Decide where heading comes from (an external
@@ -677,10 +731,10 @@ up to a second before the KR260 takes over.
       finalizing the §8 fusion design.
 - [x] ~~Decide the GPS module~~ — **NEO-M8N (or M9N) USB module chosen** (§4). Precision GPS
       isn't needed because Marvelmind covers the GPS-denied bridge segments. Purchase and confirm.
-- [ ] **Georeference the Marvelmind beacons.** Marvelmind positions are in a local frame, so the
-      beacon locations must be tied to GPS coordinates (§8). The GPS quality at beacon placement
-      sets the absolute accuracy of the under-bridge data; confirm meter-level is acceptable for
-      the survey.
+- [ ] **Georeference the Marvelmind beacons, and decide Marvelmind-only vs. GPS-live (§8.1).**
+      Get the survey area's real extent — a single bridge crossing likely makes Marvelmind-only
+      practical, but longer open-river stretches would need a beacon roughly every 30 m
+      (Marvelmind's real submap range, not its longer radio range) to stay GPS-free the whole way.
 - [ ] Sanity-check that the Basic-ESC/T200 thrust is adequate against river current, not just
       lake conditions (inherited assumption from the previous team).
 - [x] ~~Decide whether the RPLidar A2M12 will work well with the KR260~~ — the KR260/USB
@@ -695,16 +749,18 @@ up to a second before the KR260 takes over.
       absorbing 4 of the 5 USB-hungry sensors (the 5-sensors-vs-4-ports constraint) — and buy the
       powered USB hub it depends on. Also confirm the RPLidar S2 adapter's scan-motor behavior; the
       GPS CAN contingency is retired (§4).
-- [ ] Confirm which Ethernet jack is PS-native (for the static-IP/SSH setup) and check with
-      lab/campus IT on static IP vs. DHCP reservation (§7).
-- [ ] Get the previous team's ROS2 Humble repo(s) and their specific training-dataset
-      references (§9) before starting Linux sensor drivers or dataset collection from scratch.
+- [x] ~~Development environment / remote access~~ — **decided and working**: static IP, direct
+      SSH to the board, boots headless by default (§7). SSH keys still to set up.
+- [x] ~~Get the previous team's ROS2 code~~ — **decided not to reuse it** (§9); writing the ROS2
+      stack from scratch instead. Their **training dataset is still wanted** — get the specific
+      name(s)/links.
 - [ ] Confirm the Marvelmind ROS2 package runs on current ROS2 Humble (last upstream push was
-      Nov 2022) and design the GPS↔Marvelmind fusion explicitly (§8, `robot_localization`).
+      Nov 2022) and design the fusion explicitly (§8, `robot_localization`) — GPS+Marvelmind or
+      Marvelmind+heading, depending on §8.1.
 - [ ] Build a rough memory budget (§10) once the YOLO variant/DPU B-size are chosen.
 - [ ] Rough DDR/bandwidth budget (§11) once camera + DPU size are chosen.
-- [ ] Scope the NAS's role (datasets, full project backups, artifact shelf — §12) alongside the
-      now-decided git workflow, before the Vivado project is first created.
+- [ ] Decide HLS vs. hand-written RTL for the PWM core (§13.2) — either is standard, pick based on
+      team comfort.
 
 ---
 
@@ -925,6 +981,10 @@ Spikes A and B are independent and can run in parallel between teammates.
 - [BlueESC documentation](https://docs.bluerobotics.com/bluesc/)
 - [Marvelmind beacon hardware interfaces](https://marvelmind.com/pics/marvelmind_interfaces.pdf)
 - [Marvelmind ROS2 upstream package](https://github.com/MarvelmindRobotics/marvelmind_ros2_upstream)
+- [Marvelmind FAQ (submap/radio range)](https://marvelmind.com/faq/)
+- [Hiwonder Aurora930 Pro docs](https://wiki.hiwonder.com/projects/Aurora930-Pro/en/latest/docs/1.Introduction_to_Depth_Camera.html)
+- [AMD "AXI Basics 6" — AXI4-Lite in Vitis HLS](https://adaptivesupport.amd.com/s/article/1137153?language=en_US)
+- [Vitis Motor Control Library tutorial](https://docs.amd.com/r/2024.1-English/Vitis_Libraries/motor_control/tutorial.html)
 - [Luxonis IP rating docs](https://docs.luxonis.com/hardware/platform/environmental-specifications/ip-rating)
 - [Slamtec sllidar_ros2 driver](https://github.com/Slamtec/sllidar_ros2)
 - [Pololu 4-Channel RC Servo Multiplexer](https://www.pololu.com/product/2806)
