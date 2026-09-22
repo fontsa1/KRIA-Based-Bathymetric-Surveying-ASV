@@ -15,8 +15,7 @@ PS/PL partitioning, and open decisions. Update it as decisions get made, don't l
 
 **Vivado / Vitis / PetaLinux 2023.1, Vitis AI 3.5. Whole team confirmed on this set** (Enterprise
 licenses cover it). **Linux base: Kria Ubuntu 22.04 (already installed on the board), ROS2
-Humble** — chosen for best out-of-the-box app support. This also matches what the previous
-Jetson/Cube team used, which matters: see §9 on reusing their ROS2 code.
+Humble** — chosen for best out-of-the-box app support.
 
 Vitis AI 3.5's DPU IP (DPUCZDX8G v4.1, the Zynq UltraScale+ target used by KR260/KV260) is
 officially verified against 2023.1, not 2023.2 — worth double-checking installs are actually
