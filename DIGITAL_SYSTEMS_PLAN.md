@@ -1026,7 +1026,7 @@ computer up preserves the log of whatever went wrong. Decide in §13.4.
 ### 15.6 Action items
 
 - [ ] Read both battery labels: chemistry, capacity (Ah), C rating, connector.
-- [ ] Take the swollen pack out of service and dispose of it through EHS.
+- [ ] Take the swollen pack out of service and dispose of it.
 - [ ] Inspect the good pack, check per-cell voltages, balance-charge it (attended).
 - [ ] Decide the 21 V handling: charge to 4.0 V/cell if the charger allows it, or confirm with
       Blue Robotics that 21 V with a throttle cap is acceptable.
