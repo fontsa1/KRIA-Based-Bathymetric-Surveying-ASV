@@ -163,9 +163,9 @@ free/simple PS path the way that instinct might suggest on other boards.
 |---|---|---|---|
 | **BlueRobotics Ping2** echosounder/altimeter (**existing**) | UART TTL (0–5V), binary "Ping Protocol," default 115200 baud (auto-negotiable 9600–3M) | **USB** (BlueRobotics USB-serial adapter → USB1 hub — see §6) | Low bandwidth, request/response protocol — no case for PL. Ping is TTL 0–5V, not 3.3V — use the official BlueRobotics USB adapter cable (as the current boat likely already does) rather than wiring raw TTL into a PMOD pin, to sidestep level-shifting entirely. This is the core bathymetric data source — see §8. |
 | **BlueRobotics T200** thrusters ×2 + **Basic ESC** ×2 (**decided**) | Standard RC PWM, 1100–1900µs @ 50Hz, 1500µs = stop | **PL PWM generation, PMOD J2 (§6), through the PWM mux below** — full chain in §13 | Basic ESC chosen on cost grounds: the team already owns one Basic-ESC-driven thruster. Previous team reports these "haul ass" on lakes; an inherited assumption for river current, not river-tested — worth a sanity check once on the water. The Thruster Commander is **not** in the signal path (potentiometer-only inputs, no source selection); it stays a bench-test tool (§13.3). |
-| **PWM multiplexer — Pololu 4-channel RC servo mux** (**recommended, not yet bought or bench-tested**) | RC servo PWM in and out. Master and slave inputs, 4 channels; SEL takes a 0.5–2.5 ms pulse; 2.5–16 V supply | Sits between the RC receiver + KR260 PMOD J2 and the two Basic ESCs — **no KR260 port used**, see §13.2–13.3 | ~$18. A spare RC channel on SEL switches manual (RC receiver) vs. autonomous (KR260). Works with the KR260 hung or unpowered. Still to verify: it passes 1100–1900 µs unchanged and accepts the KR260's 3.3 V PWM. |
+| **PWM multiplexer — Pololu 4-channel RC servo mux** (**recommended, not yet bought or bench-tested**) | RC servo PWM in and out. Master and slave inputs, 4 channels; SEL takes a 0.5–2.5 ms pulse; 2.5–16 V supply | Mounted on the interface board (§13.7), between the RC receiver + KR260 PMOD J2 and the two Basic ESCs — **no KR260 port used**, see §13.2–13.3 | ~$18; buy it unassembled (#2807) to solder onto the interface board. A spare RC channel on SEL switches manual (RC receiver) vs. autonomous (KR260). Works with the KR260 hung or unpowered. Pololu's schematic shows a 74VHC157 logic multiplexer, so pulse widths pass through unchanged, but it isn't guaranteed to read 3.3 V as high and its inputs have no pull-downs; the interface board adds both. |
 | **RC transmitter + receiver — RadioMaster Pocket (ELRS) + ER8 receiver** (**recommended, not yet bought**) | 2.4 GHz ELRS link; ER8 has 8 PWM outputs plus a CRSF/SBUS serial output | PWM outputs → mux master inputs. Optional serial output → KR260 for the return-to-beacon trigger (§3.1; needs a serial path, see §6) | ~$107 together. Per-channel failsafe (988–2012 µs) is set in the receiver's web UI; set SEL's failsafe on purpose (§13.5). Still to verify: EdgeTX tank mixing, ELRS-to-SBUS serial for `sbus_serial`, and real-world range. |
-| **RPLidar S2** (**chosen; replaces A2M12**) | TTL UART, ships with a USB adapter and micro-USB cable | **USB**, via its adapter (USB1 hub — see §6) | Chosen for sunlight tolerance: the A2M12 is marketed for outdoor use "without direct sunlight" with no published ambient-light spec, while the S2 is rated for 80 klux and IP65, with a 30 m range vs. 12 m ($399 vs. $229). ROS2 support does not separate them: `ros-humble-rplidar-ros` 2.1.4 installs from the Humble apt repo, and Slamtec's `sllidar_ros2` (source build, S2 launch file `view_sllidar_s2_launch.py`) also supports it. Still to confirm: the adapter handles scan-motor control with no PL work. |
+| **RPLidar S2** (**chosen; replaces A2M12**) | TTL UART, ships with a USB adapter and micro-USB cable | **USB**, via its adapter (USB1 hub — see §6) | Chosen for sunlight tolerance: the A2M12 is marketed for outdoor use "without direct sunlight" with no published ambient-light spec, while the S2 is rated for 80 klux and IP65, with a 30 m range vs. 12 m ($399 vs. $229). ROS2 support does not separate them: `ros-humble-rplidar-ros` 2.1.4 installs from the Humble apt repo, and Slamtec's `sllidar_ros2` (source build, S2 launch file `view_sllidar_s2_launch.py`) also supports it. Still to confirm: the adapter handles scan-motor control with no PL work. Power: up to 1.5 A at startup (2.5 A inrush) and 450–600 mA running, more than a KR260 USB port supplies, so the adapter takes its power from the USB charger and only data goes through the hub (§15.4). |
 | **Marvelmind Super-MP beacons** (hedgehog) (**existing**) | UART, CMOS 3.3V, default 500kbps (configurable down to 4.8kbps), CSV stream; or USB-CDC virtual COM port | **USB** (native USB-CDC, USB1 hub — see §6) | Simplest sensor to bring in — no adapter needed. Bigger role than "just a sensor": GPS-denial positioning under bridges (§8) and the anchor for return-to-beacon retrieval (§3.1). Beacon locations must be georeferenced to GPS (§16). |
 | **GPS — u-blox NEO-M8N USB-C IP67 receiver** (**chosen; replaces Here 3+**, ~€90, [GNSS Store](https://gnss.store/products/elt0380)) | USB-C, standard NMEA/UBX over USB-serial | **USB** (USB1 hub — see §6) | The Here 3+ is DroneCAN (CAN bus, built for Cube/ArduPilot) and won't plug into the KR260 without a CAN transceiver and a DroneCAN Linux stack, so it's out; the §6 CAN/J21 contingency is no longer needed. Precision isn't a requirement: Marvelmind covers the GPS-denied bridge segments. Driver: `ros-humble-nmea-navsat-driver` (apt), feeding `robot_localization`'s `navsat_transform_node` (§8). An M9N is an acceptable substitute. |
 | **Camera — Luxonis OAK-D family** (**chosen; replaces RealSense D435**) | USB3 (DepthAI) | **USB0, port A, dedicated** — see §6 | Stereo depth + RGB at a reasonable price. No USB OAK-D has an IP rating, so waterproofing is the team's 3D-printed chassis with an anti-reflective glass panel and hydrophobic coating (§5). Variant still to pick: **OAK-D S2 ($329) recommended**, OAK-D Lite ($269) as the budget option. Driver: `ros-humble-depthai-ros` (2.12.2 in the apt repo for arm64). Stereo depth is short-range (about 7.5 cm baseline). Not yet tested on the KR260. |
@@ -279,10 +279,10 @@ actually resolves the 5-vs-4 shortfall.
 | Port | Assignment |
 |---|---|
 | USB0, port A | Camera — dedicated, don't share this hub pair with anything bandwidth-heavy |
-| USB0, port B | Free — spare/expansion headroom (the board is SSH-only, §7, so no keyboard/mouse use is planned here) |
-| USB1, port A | Small powered USB hub → Ping2 (BlueRobotics USB-serial adapter), RPLidar S2 (its USB adapter), Marvelmind hedgehog (native USB-CDC), GPS (NEO-M8N USB-C), **and** optionally a USB-serial adapter for the ER8 receiver's SBUS/CRSF output (return-to-beacon trigger, §3.1) — this hub is where the 5-vs-4 port shortfall gets absorbed. A heading sensor (§4, open) may add one more. |
+| USB0, port B | Leave empty unless the camera runs on the optional Y-adapter: it shares a 1.0 A power switch with the camera's port, and the camera draws up to 0.9 A (§15.4). |
+| USB1, port A | Industrial powered USB hub (StarTech ST4200USBM or equivalent, fed 12 V, §15.4) → Ping2 (BlueRobotics USB-serial adapter), RPLidar S2 (its USB adapter; data only, since its power comes from the USB charger, §15.4), Marvelmind hedgehog (native USB-CDC), GPS (NEO-M8N USB-C), **and** optionally a USB-serial adapter for the ER8 receiver's SBUS/CRSF output (return-to-beacon trigger, §3.1) — this hub is where the 5-vs-4 port shortfall gets absorbed. A heading sensor (§4, open) may add one more. |
 | USB1, port B | Free — spare/expansion headroom |
-| PMOD J2 | Thruster PWM ×2 (autonomous path) → the slave inputs of the PWM mux, which feeds the Basic ESCs (§13.2). A 12-pin Pmod has plenty of pins for 2 PWM outputs with room to spare. |
+| PMOD J2 | Thruster PWM ×2 (autonomous path) → the interface board (§13.7), which buffers them into the PWM mux's slave inputs; the mux feeds the Basic ESCs (§13.2). Signal and ground only. A 12-pin Pmod has plenty of pins for 2 PWM outputs with room to spare. |
 | PMOD J18 | Hardware e-stop input, monitored directly by PL logic that gates the PWM outputs — a stop path that still works even if Linux/ROS2/the network link is dead. **With the mux, this gates only the autonomous path**; what the e-stop must cut for the manual path too is an open decision (§13.4). |
 | PMOD J19, J20 | Reserve — spare capacity for small future PL peripherals (single sensor/actuator, low pin count) |
 | **RPi HAT header, J21** | Reserve — a plausible use is decoding the ER8's SBUS output (§3.1) if a USB-serial adapter isn't used instead |
@@ -304,8 +304,8 @@ J21 could technically fit it.
 **Action items:**
 - [ ] Confirm this port map with the team before wiring anything — re-routing after enclosures
       are built is more annoying than catching it on paper.
-- [ ] Buy/allocate a small powered USB hub for USB1 port A — required by the plan above, not
-      optional.
+- [ ] Buy the industrial powered hub for USB1 port A (StarTech ST4200USBM or another hub with a
+      7–24 V screw-terminal input), fed 12 V per §15.4 — required by the plan above, not optional.
 - [ ] Confirm whether the RPLidar's included adapter handles scan-motor PWM onboard (as
       expected — see §4) or exposes a raw PWM pin needing its own PL generation. Applies equally
       if swapping to the recommended S2.
@@ -557,17 +557,19 @@ and the safety behavior around it. Ties together §4 (T200/Basic ESC), §6 (PMOD
 ### 13.2 The signal chain
 
 ```
-RC receiver  ──(2 thrust PWM ch)──►  M inputs ┐
-                                               │  PWM mux  ──(L/R PWM)──►  Basic ESC ×2 ──► T200 ×2
-KR260 PL PWM ──(2 PWM, PMOD J2)───►  S inputs ┘
-Spare RC ch  ────────────────────►  SEL
+RC receiver  ──(2 thrust PWM ch)──►  buffer ──►  M inputs ┐
+                                                          │  PWM mux  ──(L/R PWM)──►  Basic ESC ×2 ──► T200 ×2
+KR260 PL PWM ──(2 PWM, PMOD J2)───►  buffer ──►  S inputs ┘
+Spare RC ch  ─────────────────────────────────►  SEL
 ```
+
+The buffer, the pull-downs, and the mux all sit on one interface board (§13.7).
 
 **KR260 side (autonomous path):**
 - PWM generation in **PL**, on **PMOD J2** (§6): a small AXI-attached PWM core (two channels,
   50 Hz period, pulse width settable at ~1 µs resolution over 1100–1900 µs), plus a device-tree
-  node and a bitstream. PMOD outputs are 3.3 V logic. **Confirm the mux/ESC input registers 3.3 V
-  reliably** (Pololu's slave-input logic threshold is not stated on its product page).
+  node and a bitstream. PMOD outputs are 3.3 V logic, below the ~3.4 V the mux's logic chip needs
+  for a guaranteed high, so they reach the mux through the interface board's buffer (§13.7).
 - A ROS2 node converts navigation commands (speed/steer or left/right) into the PL registers.
   Mixing to left/right happens here for the autonomous path.
 - **Watchdog in PL:** if the PS stops refreshing the PWM registers (Linux/ROS2 hang), the PL
@@ -575,7 +577,9 @@ Spare RC ch  ────────────────────►  SE
   the same "works even when Linux is dead" idea as the e-stop design in §6.
 - Neutral is the reset state. On bitstream load or PS reset the outputs are 1500 µs, never 0.
 
-**RC side (manual path):** a hobby RC receiver with PWM outputs. Left/right mixing for manual
+**RC side (manual path):** a hobby RC receiver with PWM outputs. Its outputs are also 3.3 V, so
+the two thrust channels go through the same buffer; SEL connects to the mux directly, since the mux
+reads SEL through a transistor that works at 3.3 V. Left/right mixing for manual
 driving is done in the transmitter or receiver (e.g. a differential/"tank" mix), since the mux
 passes two independent channels straight through. This is separate from the SBUS decode described
 in §3.1, which is a single-bit "return to beacon" trigger read by the KR260.
@@ -612,7 +616,7 @@ its manual and docs. Options that can:
 
 | Option | Switching | Cost | Notes |
 |---|---|---|---|
-| **A. Basic ESCs + Pololu 4-channel RC servo multiplexer (recommended)** | Hardware. A spare RC channel on SEL picks master (M) or slave (S) inputs per a user-set threshold (default ~1700 µs, ±64 µs hysteresis). | ~$18 ([product](https://www.pololu.com/product/2806)) | Purpose-built for autonomous/manual override. 2.5–16 V supply, SEL accepts 0.5–2.5 ms pulses at 10–330 Hz. Failsafe is a jumper: off, master inputs take control if SEL is lost; on, outputs go low. Keeps the Basic ESCs. Works with the KR260 hung or unpowered. |
+| **A. Basic ESCs + Pololu 4-channel RC servo multiplexer (recommended)** | Hardware. A spare RC channel on SEL picks master (M) or slave (S) inputs per a user-set threshold (default ~1700 µs, ±64 µs hysteresis). | ~$18 ([product](https://www.pololu.com/product/2806); buy unassembled, [#2807](https://www.pololu.com/product/2807), for the interface board, §13.7) | Purpose-built for autonomous/manual override. 2.5–16 V supply, SEL accepts 0.5–2.5 ms pulses at 10–330 Hz. Failsafe is a jumper: off, master inputs take control if SEL is lost; on, outputs go low. Keeps the Basic ESCs. Works with the KR260 hung or unpowered. |
 | B. Basic ESCs + Acroname RxMux | Same idea, 8 channels, 2 sources. | ~$19 ([product](https://acroname.com/store/s56-rxmux-1)) | Defaults to input A if SEL is absent, and the vendor states it provides no failsafe or redundancy by itself. More channels than needed here. |
 | C. Mux inside the PL | Logic in the KR260's fabric selects between the decoded RC signal and the autonomous PWM. | No hardware cost | Extends the J18 e-stop gating design. Loses manual control if the KR260 loses power or the PL is unconfigured, which is exactly when a manual override matters. Acceptable only if the KR260 is trusted to stay up. |
 | D. Option B hybrid low-level board (§2) | Native to the flight-controller firmware (ArduRover RC passthrough and mode arbitration). | Depends on board | No separate mux needed and no PL PWM work. **Not applicable:** §2 chose full replacement with an external mux. Kept for reference. |
@@ -620,10 +624,11 @@ its manual and docs. Options that can:
 | F. Roboteq BLDC controllers | RC, serial and CAN inputs. | High | Sized for much larger motors than a T200. Input-priority behavior not verified. Overkill here. |
 
 **Decision context:** §2 chose full replacement with an external mux for manual override, which is
-this section's Option A (the Pololu mux; not the same "Option A" as in §2). **Not yet verified on
-hardware:** that the Pololu mux passes 1100–1900 µs pulses
-through unchanged (its page doesn't say so explicitly) and that it accepts the KR260's 3.3 V PWM.
-Bench-test both with a scope before wiring the boat.
+this section's Option A (the Pololu mux; not the same "Option A" as in §2). **Checked against
+Pololu's schematic and product photo:** the mux is a 74VHC157 logic multiplexer, so pulse widths
+pass through unchanged (nanoseconds of delay, no regeneration). It isn't guaranteed to read the
+KR260's or the receiver's 3.3 V signals as high, and its inputs have no pull-downs; the interface
+board (§13.7) adds a buffer and pull-downs for both. Still scope the outputs on the bench (§13.6).
 
 ### 13.4 Safety: where the e-stop actually sits
 
@@ -677,8 +682,9 @@ up to a second before the KR260 takes over.
 
 - [ ] Bench: one T200 + Basic ESC + KR260 PL PWM alone (no mux): arming, stop, both directions,
       deadband around 1500 µs (check the T200 datasheet for the exact range).
-- [ ] Bench: add the mux; scope the output pulse widths against the inputs (pass-through
-      accuracy), confirm 3.3 V slave input works, and test SEL switching mid-run.
+- [ ] Bench: add the interface board with the mux (§13.7); scope the output pulse widths against
+      the inputs and test SEL switching mid-run.
+- [ ] Bench: run the interface board's signal-loss tests (§13.7) before the mux goes in the boat.
 - [ ] Confirm arming works through the mux, including power-up with SEL in each position.
 - [ ] Test PL watchdog: kill the ROS2 node, then hang Linux; outputs must go to neutral.
 - [ ] Test SEL loss, RC receiver power loss, and KR260 power loss; record who has control in each.
@@ -686,13 +692,92 @@ up to a second before the KR260 takes over.
 - [ ] On-water check of thrust against river current (§16 item; inherited assumption).
 
 **Action items:**
-- [ ] Confirm the mux product (§13.3): Pololu 4-channel is the current recommendation, since §2
-      is decided as an external mux.
+- [ ] Buy the Pololu mux unassembled (#2807) and build the interface board around it (§13.7).
 - [ ] Decide what the e-stop cuts and where (§13.4).
 - [ ] Confirm the RC pair (§13.5, recommended Pocket ELRS + ER8): check EdgeTX tank mixing and
       range, set per-channel failsafe (SEL above ~1700 µs if the KR260 should take over on link
       loss), and confirm the SBUS-vs-CRSF serial output for the return-to-beacon trigger.
 - [ ] Set the throttle cap in both the PL clamp and the transmitter's output limits (§15.2).
+
+### 13.7 Interface board: buffer, pull-downs, and the mux
+
+One small perfboard carries the mux and the parts around it. It fixes two problems found in the mux
+and ESC documentation:
+
+- **3.3 V margin.** Pololu's schematic and product photo show the mux is a 74VHC157 logic
+  multiplexer, powered from a 5 V regulator on the mux board. Its datasheet guarantees a logic high
+  only above 0.7 × VCC, about 3.4 V here. Both signal sources are 3.3 V: the ER8 (an ESP-based
+  receiver) and the KR260's Pmod pins. It would probably work, but it's outside the guaranteed
+  range, with little noise margin next to 30 A ESCs. SEL doesn't need help: the mux reads it
+  through a transistor, which works at 3.3 V.
+- **Undriven signal lines.** Blue Robotics doesn't document what the Basic ESC does when its pulses
+  stop (asked on their forum, staff weren't sure), and the BLHeli firmware project has an open
+  report of a motor that kept spinning after its signal wire was pulled. The mux's M and S inputs
+  connect straight to its logic chip with no pull-downs, so an unpowered KR260 or an unplugged
+  receiver leaves them floating, and a mux that loses power leaves the ESC lines floating.
+
+```
+                    74AHCT125 buffer
+ER8 left     ─●─ 2  1A      1Y  3 ─── mux M1
+ER8 right    ─●─ 5  2A      2Y  6 ─── mux M2
+KR260 left   ─●─ 9  3A      3Y  8 ─── mux S1
+KR260 right  ─●─ 12 4A      4Y 11 ─── mux S2
+                 1, 4, 10, 13 (enable pins) ─ GND
+                 14 ─ +5 V   (0.1 µF to GND right at the pin)
+                 7  ─ GND
+● = 10 kΩ from that line to GND
+
+ER8 SEL ─────────────────────────────── mux SEL (no buffer needed)
+mux M3, M4, S3, S4 ─ GND
+mux OUT1 ─── left ESC signal    (10 kΩ to GND at the ESC end)
+mux OUT2 ─── right ESC signal   (10 kΩ to GND at the ESC end)
+```
+
+- **Buffer:** SN74AHCT125N (TI, through-hole, in production; the pin numbers above are from its
+  datasheet). It reads anything above 2.0 V as high at a 5 V supply and outputs about 5 V, above
+  the mux's ~3.4 V threshold. The mux's datasheet allows inputs up to 5.5 V regardless of its own
+  supply.
+- **Pull-downs:** 10 kΩ on each buffer input, so a dead, unpowered, or unplugged source reads as a
+  steady low instead of a floating line. The two ESC pull-downs go at the ESC end of the signal
+  lead (a resistor spliced between signal and ground under heat-shrink): that's the only place
+  that also covers the lead coming unplugged at the board.
+- **Power:** from the mux/receiver 5 V BEC (§15.3), whose servo lead plugs into the board. The
+  same 5 V reaches the mux and the ER8 through the center wires of the servo leads. Add a
+  10–100 µF capacitor across the board's 5 V input.
+- **Mux mounting:** the unassembled Pololu mux (#2807, the same board without its headers
+  soldered) solders straight onto the perfboard, so the buffer-to-mux links are short wires instead
+  of four more servo cables. Keep its LED, its threshold-learning pins, and its failsafe jumper
+  reachable.
+- **Unused mux inputs (M3, M4, S3, S4) go to ground.** The 74VHC157 datasheet says unused inputs
+  "must always be tied to an appropriate logic voltage level." On the pre-assembled mux a jumper
+  cap can't do this, because the 5 V pin sits between signal and ground; on the perfboard it's a
+  wire.
+- **KR260 link:** signal and ground only, on its own connector type (e.g. JST-XH), so a 5 V servo
+  lead can't be plugged into it.
+- **Vibration:** glue or lock the friction-fit headers.
+
+| Part | Qty |
+|---|---|
+| SN74AHCT125N + 14-pin DIP socket | 1 |
+| 10 kΩ resistor (4 on the board, 2 at the ESCs) | 6 |
+| 0.1 µF ceramic capacitor | 1 |
+| 10–100 µF electrolytic capacitor | 1 |
+| Perfboard | 1 |
+| 0.1" male headers | as needed |
+| JST-XH connector pair | 1 |
+| Pololu 4-channel RC servo mux, unassembled (#2807) | 1 |
+
+**Bench tests before the mux goes in the boat.** Run them with the thruster in water: Blue Robotics
+warns against running a T200 dry for more than 10 seconds.
+
+- [ ] With the ESC powered and nothing on its signal lead, measure the signal pin. It should float
+      or sit low; an internal pull-up would fight the 10 kΩ pull-down.
+- [ ] Scope each mux output against its input, from both the receiver and the KR260.
+- [ ] With a thruster running, pull each source while it's in control: the KR260 cable with SEL on
+      autonomous, then the receiver's thrust lead with SEL on manual. Then unplug the ESC lead at
+      the board, and finally cut the board's 5 V. The thruster must stop each time; record how
+      long it takes. If it doesn't stop, the pull-downs aren't enough on their own and the
+      power-cut e-stop (§13.4) is the only reliable stop.
 
 ---
 
@@ -710,7 +795,7 @@ design proposals, not existing IP.
 |---|---|---|
 | Hull and mechanical | Boogie-board hull, waterproof boxes, reused 3D-printed brackets, 3D-printed camera chassis with anti-reflective glass panel and hydrophobic coating | §5 (camera enclosure). Hull, mounting, cable penetrators, and thermal layout are not covered in this doc. |
 | Power | Battery, distribution, fusing, regulation for the KR260/USB hub/sensors, thruster supply | §15 |
-| Propulsion | 2× T200 + Basic ESC, PWM multiplexer, RC receiver | §13 |
+| Propulsion | 2× T200 + Basic ESC, interface board with the PWM multiplexer, RC receiver | §13 |
 | Sensing | Ping2, RPLidar S2, Marvelmind, GPS, OAK-D camera, heading source (open) | §4, §6, §8 |
 | Compute | KR260: PS (Linux, ROS2) + PL (DPU, thruster block) | §1, §10, §11, this section |
 | Communications | WiFi/SSH from a lab laptop; 2.4 GHz RC link | §3, §7, §13.5 |
@@ -734,14 +819,14 @@ design proposals, not existing IP.
                                         PMOD J2 (2x PWM) <-----------------+   ^ PMOD J18
                                                |                                | e-stop in
    RC receiver (2x thrust PWM + SEL) --> +-----v-------+                        |
-   RC transmitter ~~ 2.4 GHz link ~~     | PWM mux     |--> Basic ESC x2 --> T200 x2
-                                         | (external)  |
+   RC transmitter ~~ 2.4 GHz link ~~     | interface   |--> Basic ESC x2 --> T200 x2
+                                         | board + mux |
                                          +-------------+
 ```
 
-The mux sits outside the KR260. With SEL on manual, the RC receiver drives the ESCs directly and
-the KR260 has no influence on the thrusters. With SEL on autonomous, the PL's PWM outputs drive
-them.
+The mux sits outside the KR260, on the interface board with a buffer and pull-downs (§13.7). With
+SEL on manual, the RC receiver drives the ESCs directly and the KR260 has no influence on the
+thrusters. With SEL on autonomous, the PL's PWM outputs drive them.
 
 ### 14.3 How the PS talks to the PL
 
@@ -790,9 +875,9 @@ There are two separate paths, and they use different mechanisms.
 - **Loading:** `xmutil unloadapp` then `xmutil loadapp <app-name>`. On the board today,
   `xmutil listapps` shows only the default `k26-starter-kits`, so the custom app must be created.
 - **Automation:** a systemd oneshot unit runs the load before the ROS2 launch starts.
-- **Safe state during boot:** until the bitstream loads, the PMOD pins are not driven. The mux
-  must therefore default to **manual (RC)** so the ESCs see the receiver's neutral, not a floating
-  line. Verify the Pololu SEL default and failsafe jumper (§13.3), and never leave SEL on
+- **Safe state during boot:** until the bitstream loads, the PMOD pins are not driven. The
+  interface board's pull-downs hold those lines low (§13.7), and the mux must default to **manual
+  (RC)** so the ESCs see the receiver's neutral. Verify the Pololu SEL default and failsafe jumper (§13.3), and never leave SEL on
   autonomous while reloading the bitstream.
 
 ### 14.5 Thruster block (proposed register map)
@@ -830,10 +915,10 @@ scheduling. Software only updates the target values.
 |---|---|---|
 | ROS2 node crash or Linux hang | Heartbeat stops, watchdog trips, autonomous outputs go to neutral | Pilot can flip SEL to manual |
 | Upstream navigation stops sending commands | `thruster_driver` stops refreshing the heartbeat (see §14.7), same as above | Pilot |
-| KR260 loses power | PL outputs are undriven. What the Basic ESC does on signal loss is **unverified**; test it. | Pilot must already be on manual, or flip to it |
+| KR260 loses power | PL outputs are undriven; the interface board's pull-downs hold them low (§13.7). Whether the Basic ESC then stops is **undocumented**; bench-test it (§13.7). | Pilot must already be on manual, or flip to it |
 | RC link lost | Receiver sets SEL and thrust channels to their configured failsafe values (§13.5) | Per failsafe setting |
 | E-stop pressed | PL forces neutral on the autonomous path. Power cut is still to be decided (§13.4). | Depends on §13.4 |
-| Boot or bitstream reload | PMOD pins undriven until load completes | Mux defaults to manual (§14.4) |
+| Boot or bitstream reload | PMOD pins undriven until load completes; pull-downs hold them low | Mux defaults to manual (§14.4) |
 
 ### 14.7 ROS2 software architecture
 
@@ -875,7 +960,7 @@ Spikes A and B are independent and can run in parallel between teammates.
 ### 14.9 What the whole-robot plan still needs from other subsystems
 
 - **Power:** now its own section (§15). Still missing from it: battery capacity and C rating,
-  the USB hub's supply, and the e-stop cut point.
+  and the e-stop cut point.
 - **Mechanical:** enclosure layout, cable penetrators, and thermal design. The KR260 has a fan
   (checked earlier, driven at a low duty cycle), so in a sealed box the heat has to reach the
   hull or air. That needs a plan.
@@ -891,7 +976,8 @@ Spikes A and B are independent and can run in parallel between teammates.
       and DTBO details.
 - [ ] Decide the PMOD pin mapping for the PWM, e-stop, and (optionally) SEL monitoring, against the
       KR260 pinout.
-- [ ] Verify what the Basic ESC does when its signal disappears (KR260 power loss case).
+- [ ] Verify the Basic ESC stops when the interface board's pull-downs hold its signal line low
+      (KR260 power loss case, §13.7).
 - [ ] Decide whether to shrink `cma=1000M` and fold the result into the §10 memory budget.
 - [ ] Get the mechanical inputs listed in §14.9 (power is §15).
 
@@ -902,7 +988,9 @@ Spikes A and B are independent and can run in parallel between teammates.
 Two 5-cell lithium packs in parallel feed a fused distribution block. The thrusters run straight
 off the battery bus. The KR260 and the mux/RC receiver each get their own regulator, fed directly
 from the bus, so one load can't pull down another's voltage and manual override never depends on
-the KR260's supply. Reused from the old boat: the batteries, and whichever of the leftover
+the KR260's supply. The USB sensors are powered from the fuse block too, through a marine USB
+charger and a powered hub, so the KR260's USB ports carry data plus, at most, the camera (§15.4).
+Reused from the old boat: the batteries, and whichever of the leftover
 ServoCity cables are heavy enough for their branch (§15.4).
 
 ### 15.1 Batteries
@@ -924,6 +1012,8 @@ ServoCity cables are heavy enough for their branch (§15.4).
 | Blue Sea 5025 fuse block | 32 V DC, 30 A per circuit, 100 A per block | Fine, given the throttle cap below |
 | Pololu mux VM rail | 2.5–16 V | **Must never see battery voltage.** Fed only from the 5 V BEC. |
 | RadioMaster ER8 receiver | 4.5–8.4 V | Fed from the 5 V BEC |
+| Blue Sea 1045 USB charger | 9–32 V in; 5 V ±5 %, 2.4 A per port, 4.8 A total | Fine |
+| Powered USB hub (StarTech ST4200USBM) | 7–24 V in | Only 3 V above a full pack, so it's fed from the 12 V regulator instead (§15.4) |
 
 **Over-voltage at full charge (T200: 21 V vs. its 20 V max).** Two ways to handle it:
 - **Charge to 4.0 V/cell (20.0 V), if the charger allows a lower end voltage.** Every component
@@ -957,9 +1047,10 @@ Battery pack(s), 5S, parallel (≈15–21 V)
  Blue Sea 5025 fuse block (positive bus + fuses; negative bus = common ground)
    ├── 30 A ── Basic ESC L ── T200 L          (raw battery, no regulator)
    ├── 30 A ── Basic ESC R ── T200 R          (raw battery, no regulator)
-   ├──  5 A ── 12 V regulator ── KR260 (→ USB sensors)
-   ├──  2 A ── 5 V BEC ── Pololu mux VM rail ── RC receiver
-   ├── spare (candidate: powered USB hub supply, §15.4)
+   ├──  5 A ── 12 V regulator ─┬─ KR260 (USB data to the sensors)
+   │                           └─ 2 A inline fuse ── powered USB hub (sonar, Marvelmind, GPS; lidar data)
+   ├──  2 A ── 5 V BEC ── interface board (§13.7) ── mux VM rail + RC receiver
+   ├──  5 A ── Blue Sea 1045 USB charger ── lidar adapter power; optional camera Y-adapter
    └── spare
 ```
 
@@ -967,10 +1058,12 @@ Rules:
 - **Every regulator is fed directly from the bus, never from another branch.** In particular the
   5 V BEC doesn't hang off the 12 V branch: manual override has to keep working when the KR260 or
   its regulator fails (§2, §13).
-- **The 5 V BEC powers the mux's VM rail** through any VM pin (a spare receiver channel, SEL, or
-  an unused OUT). Per Pololu, the mux draws its power from those pins and the receiver shares the
-  rail. The S-input power pins (VS rail) aren't used by the board, so the KR260 connects only
-  signal and ground to the S inputs.
+- **The 5 V BEC powers the interface board (§13.7)**, which passes 5 V on to the mux's VM rail and,
+  through the servo leads' center wires, to the receiver. Per Pololu, the mux draws its power from
+  its VM pins and the receiver shares the rail. The KR260 connects only signal and ground.
+- **The powered USB hub is the one load hung off the 12 V branch.** It only serves the KR260's
+  sensors, which are useless without the KR260 anyway, and its own 2 A inline fuse limits what a
+  USB fault can do to the KR260's supply.
 - **Common ground everywhere:** the KR260's PWM needs the mux's ground as its reference.
 - **Brownout:** thruster surges pull the bus down briefly. The regulator's 13.3 V minimum leaves
   margin above an empty 5S pack (~15 V), but add bulk capacitance at the 12 V regulator's input
@@ -983,8 +1076,11 @@ Rules:
 | **[Blue Sea 5025](https://www.bluesea.com/products/5025/ST_Blade_Fuse_Block_-_6_Circuits_with_Negative_Bus_and_Cover) (recommended)** | Fuse block: 6 circuits, negative bus, cover | 30 A per circuit, 100 A per block, 32 V DC, ATO/ATC blade fuses, ring terminals. Distribution, per-branch fusing, and common ground in one marine-rated part. |
 | [Blue Sea 2307](https://www.bluesea.com/products/2307/Common_150A_BusBar_-_Four_1_4in-20_Studs_with_Cover) bus bars (+ and −) with inline fuses | Alternative | 150 A, 4 studs each. Use if a branch ever needs more than 30 A. More parts and bulk. |
 | Main fuse and holder (MIDI/ANL class) | Main protection | 60–80 A, as close to the battery as possible, below the block's 100 A |
-| [Pololu D36V50F12](https://www.pololu.com/product/4095) | 12 V for the KR260 | 12 V, up to 4.5 A (~54 W, above the KR260's 36 W adapter), 13.3–50 V in. A step-down is enough on 5S; no buck-boost needed. |
-| [Blue Robotics 5V 6A Power Supply](https://bluerobotics.com/store/comm-control-power/control/bec-5v6a-r1/) | 5 V for mux and receiver | 7–26 V in. Far more current than needed; chosen because it's built for this and comes from the thrusters' vendor. |
+| [Pololu D36V50F12](https://www.pololu.com/product/4095) | 12 V for the KR260 | 12 V, up to 4.5 A (~54 W, above the KR260's 36 W adapter), 13.3–50 V in. A step-down is enough on 5S; no buck-boost needed. Also feeds the powered USB hub, a small load once the lidar is powered separately. |
+| [Blue Robotics 5V 6A Power Supply](https://bluerobotics.com/store/comm-control-power/control/bec-5v6a-r1/) | 5 V for the interface board, mux, and receiver | 7–26 V in. Far more current than needed; chosen because it's built for this and comes from the thrusters' vendor. |
+| [Blue Sea 1045](https://www.bluesea.com/products/1045/12_24V_DC_Dual_USB_Charger_4.8A_with_Intelligent_Device_Recognition) | 5 V USB power for the lidar (and optionally the camera) | 9–32 V in, 5 V ±5 %, 2.4 A per port, 4.8 A total. Potted; mounts in a 1-1/8" hole. |
+| [StarTech ST4200USBM](https://www.startech.com/en-us/cards-adapters/st4200usbm) (or equivalent) | Powered USB hub (§6) | 4-port USB 2.0, metal, DIN-rail or wall mount, 3-pin screw terminal taking 7–24 V. 0–55 °C operating. Per-port current isn't published. |
+| [Luxonis OAK Y-adapter](https://shop.luxonis.com/products/oak-y-adapter) (optional) | Separate power for the camera | $24. Data goes to the KR260, power comes from a USB charger port. |
 
 Drone-style solder-pad distribution boards were considered and not recommended: no fusing, not
 marine-rated, and harder to rework.
@@ -994,7 +1090,8 @@ marine-rated, and harder to rework.
 | Branch | Typical | Peak | Fuse | Wire |
 |---|---|---|---|---|
 | ESC L / ESC R (each) | 7–8 A (old team, unverified) | ~32 A uncapped near 20 V; 20–25 A with the cap | 30 A | 10–12 AWG |
-| 12 V regulator → KR260 + USB sensors | — | ~2.2 A from the battery at the KR260's 36 W max (≈90% efficient) | 5 A | 16–18 AWG |
+| 12 V regulator → KR260 + powered hub | — | ~3 A from the battery with the KR260 at its 36 W max plus the hub's sensors (≈90% efficient) | 5 A | 16–18 AWG |
+| Blue Sea 1045 → lidar (+ camera) | ~0.6 A at 5 V (lidar running) | Up to 1.5 A at 5 V at lidar startup; under 2 A from the battery even at the charger's full 4.8 A | 5 A | 18 AWG |
 | 5 V BEC → mux + receiver | well under 0.5 A | — | 2 A | 20–22 AWG |
 | Main (battery → block) | ~17 A cruising | ~55 A with the cap | 60–80 A | 8–10 AWG |
 
@@ -1003,12 +1100,20 @@ marine-rated, and harder to rework.
 - **Leftover ServoCity cables:** their servo-style cables are typically 22–26 AWG. Fine for PWM
   signal leads and the 5 V mux/receiver branch; not for ESC or main runs. Check the gauge printed
   on each cable before assigning it.
-- **USB hub supply (open):** §6 relies on a powered USB hub, which needs its own supply. Options:
-  a spare fuse circuit with its own small 5 V regulator, or a 12 V-input hub on its own circuit.
-  Don't share the mux/receiver's 5 V BEC, so a USB fault can't take down manual override.
-- **USB power through the KR260:** the OAK-D and the lidar's scan motor are the heavy USB loads.
-  Add up their real currents against the KR260's USB limits and 36 W supply once parts are in
-  hand.
+
+**USB power: the KR260's USB ports carry data; the sensors' power comes from the fuse block.** Each
+KR260 port supplies up to 900 mA, each pair of ports shares a 1.0 A power switch, and all four share
+2.0 A (UG1092). The heavy loads don't fit that: the RPLidar S2 needs up to 1.5 A to start (2.5 A
+inrush; 450–600 mA running, at 4.9–5.2 V), the OAK-D draws 0.5–0.9 A, and the Ping2 peaks at 0.9 A.
+
+| Load | Powered by | Notes |
+|---|---|---|
+| Sonar, Marvelmind, GPS (and the lidar's data line) | Powered hub on USB1 port A (§6) | Fed 12 V from the KR260's regulator through a 2 A inline fuse, not from the battery: a full pack's 21 V is too close to the hub's 24 V limit. |
+| Lidar | Its USB adapter's own power input, from the Blue Sea 1045 | Slamtec's S2 kit includes a "USB-DC power cord" to "connect additional power to the USB adapter." The hub's per-port current isn't published, so it isn't relied on for the 1.5 A start. |
+| Camera | Its KR260 port, with the neighboring port left empty (§6), or the optional OAK Y-adapter from the 1045's second port | The camera fits the KR260's per-port limit, but only just. |
+
+Don't share the mux/receiver's 5 V BEC with any of this, so a USB fault can't take down manual
+override.
 
 ### 15.5 E-stop in the power system
 
@@ -1036,9 +1141,15 @@ computer up preserves the log of whatever went wrong. Decide in §13.4.
 - [ ] Check the gauge of the leftover ServoCity cables; assign them to signal and 5 V use unless
       they're heavy enough for more.
 - [ ] Decide the e-stop cut point (§13.4, §15.5).
-- [ ] Decide how the powered USB hub is supplied.
-- [ ] Buy: Blue Sea 5025, main fuse and holder, Pololu D36V50F12, Blue Robotics 5V 6A, ATC
-      fuses (30 A ×2, 5 A, 2 A, spares).
+- [x] ~~Decide how the powered USB hub is supplied~~ — **decided: 12 V from the KR260's regulator,
+      with the lidar (and optionally the camera) powered from a Blue Sea 1045 USB charger (§15.4).**
+- [ ] Bench: the lidar's supply reads 4.9–5.2 V at its connector while it runs (the charger's ±5 %
+      is slightly wider than the lidar's range), and the powered hub doesn't back-feed the KR260
+      (with the KR260 unplugged from power, its LEDs stay off when the hub is connected).
+- [ ] Buy: Blue Sea 5025, main fuse and holder, Pololu D36V50F12, Blue Robotics 5V 6A, Blue Sea
+      1045, StarTech ST4200USBM (or equivalent), a 2 A inline fuse holder, ATC fuses (30 A ×2,
+      5 A ×2, 2 A, spares), and optionally the OAK Y-adapter. Check the 1045's fuse size against
+      Blue Sea's installation sheet.
 - [ ] Price a replacement 5S pack (matching chemistry and capacity) for when budget allows.
 
 ---
@@ -1082,8 +1193,8 @@ computer up preserves the log of whatever went wrong. Decide in §13.4.
       retrieval). ArduRover's native RTL is not available with the Cube gone.
 - [ ] **Sign off on the physical port assignment (§6) as a team** — especially the USB1 hub
       absorbing 4 of the 5 USB-hungry sensors (the 5-sensors-vs-4-ports constraint) — and buy the
-      powered USB hub it depends on. Also confirm the RPLidar S2 adapter's scan-motor behavior; the
-      GPS CAN contingency is retired (§4).
+      industrial powered hub it depends on (12 V-fed, §15.4). Also confirm the RPLidar S2
+      adapter's scan-motor behavior; the GPS CAN contingency is retired (§4).
 - [x] ~~Development environment / remote access~~ — **decided and working**: static IP, direct
       SSH to the board, boots headless by default (§7). SSH keys still to set up.
 - [x] ~~Get the previous team's ROS2 code~~ — **decided not to reuse it** (§9); writing the ROS2
@@ -1096,9 +1207,12 @@ computer up preserves the log of whatever went wrong. Decide in §13.4.
 - [ ] Rough DDR/bandwidth budget (§11) once camera + DPU size are chosen.
 - [ ] Decide HLS vs. hand-written RTL for the PWM core (§13.2) — either is standard, pick based on
       team comfort.
+- [ ] **Build the interface board (§13.7):** buffer, pull-downs, and the mux on one perfboard. Run
+      its signal-loss bench tests before the mux goes in the boat.
 - [ ] **Power system (§15.6):** read the battery labels, retire the swollen pack, decide how to
       handle 21 V at full charge, set the throttle cap on both control paths, and buy the
-      distribution parts. Running on one pack until a replacement fits the budget.
+      distribution and USB power parts (§15.4). Running on one pack until a replacement fits the
+      budget.
 
 ---
 
@@ -1155,3 +1269,17 @@ computer up preserves the log of whatever went wrong. Decide in §13.4.
 - [Blue Sea 2307 Common 150A BusBar](https://www.bluesea.com/products/2307/Common_150A_BusBar_-_Four_1_4in-20_Studs_with_Cover)
 - [Pololu D36V50F12 12 V, 4.5 A step-down regulator](https://www.pololu.com/product/4095)
 - [Blue Robotics 5V 6A Power Supply](https://bluerobotics.com/store/comm-control-power/control/bec-5v6a-r1/)
+- [Pololu 4-Channel RC Servo Multiplexer schematic (74VHC157, input wiring)](https://www.pololu.com/file/0J701/pololu-4-channel-rc-servo-multiplexer-schematic-diagram.pdf)
+- [Pololu 4-Channel RC Servo Multiplexer, unassembled (#2807)](https://www.pololu.com/product/2807)
+- [onsemi 74VHC157 datasheet](https://www.onsemi.com/download/data-sheet/pdf/74vhc157-d.pdf)
+- [TI SN74AHCT125 datasheet](https://www.ti.com/lit/ds/symlink/sn74ahct125.pdf)
+- [Blue Robotics forum: Basic ESC stop time after signal loss](https://discuss.bluerobotics.com/t/basic-esc-safety-time-to-stop-motors/12470)
+- [BLHeli issue #517: motor keeps spinning with the PWM signal disconnected](https://github.com/bitdump/BLHeli/issues/517)
+- [KR260 Starter Kit User Guide UG1092 v1.1, PDF (USB and Pmod power limits)](https://uk.farnell.com/site/binaries/content/assets/common/product-family-documents/amd-kria-k24-k26/kria-kr260-robotics-starter-kit-user-guide.pdf)
+- [RPLIDAR S2 datasheet (power, motor control)](https://files.seeedstudio.com/products/114992738/document/SLAMTEC_rplidar_datasheet_S2M1_v1.0_en.pdf)
+- [RPLIDAR S2 kit user manual (USB adapter, USB-DC power cord)](https://bucket-download.slamtec.com/1d6d308d60e27da6c910177b06370a1fe901defd/SLAMTEC_rplidarkit_usermanual_S2_v1.1_en.pdf)
+- [Ping2 sonar product page (current draw)](https://bluerobotics.com/store/sonars/echosounders/ping-sonar-r2-rp/)
+- [Luxonis USB deployment guide (OAK power draw)](https://docs.luxonis.com/hardware/platform/deploy/usb-deployment-guide)
+- [Luxonis OAK Y-adapter](https://shop.luxonis.com/products/oak-y-adapter)
+- [StarTech ST4200USBM manual](https://sgcdn.startech.com/005329/media/sets/ST4200USBM_Manual/ST4200USBM.pdf)
+- [Blue Sea 1045 dual USB charger](https://www.bluesea.com/products/1045/12_24V_DC_Dual_USB_Charger_4.8A_with_Intelligent_Device_Recognition)
