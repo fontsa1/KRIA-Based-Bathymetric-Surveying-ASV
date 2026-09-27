@@ -902,8 +902,8 @@ lines carry signals and data, and `~~` marks radio links.
                                                                              ║
 ┌─ Blue Sea 5025 fuse block (negative bus = common ground; 1 circuit spare) ─╨─────────────────────┐
 └─────╥───────────────────────────╥───────────────────────────╥─────────────────────╥─────╥────────┘
-      ║ 5 A                       ║ 5 A                       ║ 2 A                 ║ 30 A║ 30 A
-      ║ Blue Sea 1045             ║ 12 V regulator            ║ 5 V BEC             ║     ║
+      ║ 5 A, 12 V                 ║ 5 A                       ║ 2 A                 ║ 30 A║ 30 A
+      ║ Blue Sea 1045             ║ 12 V regulator            ║ 5 V BEC             ║ 21 V║ 21 V
       ║             ╔═ 2 A fuse ══╣                           ║                     ║     ║
 ┌─────╨─────────────╨───┐     ┌───╨─────────────────┐     ┌───╨───────────────┐   ┌─╨─────╨────────┐
 │ USB devices           │     │ KR260               │     │ Interface board   │   │ Basic ESC ×2   │
