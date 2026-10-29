@@ -1,0 +1,17 @@
+# Starts the Ping2 sonar node at boot and restarts it if it crashes.
+# Install once:  sudo cp ~/sonar/ping2.service /etc/systemd/system/
+#                sudo systemctl daemon-reload && sudo systemctl enable --now ping2
+[Unit]
+Description=Ping2 sonar ROS 2 node
+After=network.target
+
+[Service]
+User=ubuntu
+# --disable-external-lib-logs: no log files under ~/.ros/log; journald keeps the output
+ExecStart=/bin/bash -c 'source /opt/ros/humble/setup.bash && exec python3 /home/ubuntu/sonar/ping2_node.py --ros-args --params-file /home/ubuntu/sonar/ping2.yaml --disable-external-lib-logs'
+KillSignal=SIGINT
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

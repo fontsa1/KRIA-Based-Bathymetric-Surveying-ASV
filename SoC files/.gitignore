@@ -1,0 +1,15 @@
+# Vivado projects belong outside the repo (rebuild_project.tcl puts them in ~/vivado_builds/).
+# If one ends up in here anyway, keep it out of git; export_project.tcl saves what matters.
+*.xpr
+*.srcs/
+*.gen/
+*.cache/
+*.runs/
+*.hw/
+*.sim/
+*.ip_user_files/
+.Xil/
+__pycache__/
+# Build results go on a GitHub Release (see README.md)
+*.zip
+*.tar.gz

@@ -13,16 +13,16 @@ Type these in a normal (non-admin) PowerShell tab in Windows Terminal unless a r
 
 ## Open Ubuntu and launch the tools
 
-These open each tool straight from PowerShell. Once you're inside Ubuntu (`wsl ~`), just type `vivado`, `vitis`, `vitis_hls`, `v++` or `xsct`.
+Vivado opens straight from PowerShell. The Vitis IDE closes as soon as a one-line `wsl` command finishes, so start Vitis (and Vitis HLS) from an Ubuntu shell and leave that shell open while you work. Inside Ubuntu (`wsl ~`) you can type `vivado`, `vitis`, `vitis_hls`, `v++` or `xsct`.
 
 | Task | PowerShell command |
 | --- | --- |
 | Open an Ubuntu shell in your Linux home | `wsl ~` |
 | Open Vivado | `wsl --cd ~ -e bash -ic vivado` |
 | Open Vivado in a project folder (its log files land there too) | `wsl --cd /home/xbox_/kr260 -e bash -ic vivado` |
-| Open the Vitis Classic IDE (the one the tutorial uses) | `wsl --cd ~ -e bash -ic vitis` |
-| Open the new Vitis Unified IDE | `wsl --cd ~ -e bash -ic "vitis -new"` |
-| Open Vitis HLS | `wsl --cd ~ -e bash -ic vitis_hls` |
+| Open the Vitis Classic IDE (the one the tutorial uses) | `wsl ~`, then `vitis` |
+| Open the new Vitis Unified IDE | `wsl ~`, then `vitis -new` |
+| Open Vitis HLS | `wsl ~`, then `vitis_hls` |
 | Open Vivado and get the PowerShell prompt back | `Start-Process wsl -ArgumentList '--cd ~ -e bash -ic vivado' -WindowStyle Hidden` |
 
 The **Ubuntu-22.04** entry in Windows Terminal's new-tab dropdown opens the same shell as `wsl ~`.
@@ -105,6 +105,7 @@ Inside a container, run `conda activate vitis-ai-pytorch` first. Your `~/Vitis-A
 **Quick fixes**
 
 - **A Vivado or Vitis window doesn't appear or freezes:** close it, run `wsl --shutdown`, wait about 10 seconds and launch it again.
+- **File → New → Platform Project does nothing in the Vitis Classic IDE:** Ubuntu is missing the icon theme that wizard needs. Run `wsl -u root bash -c "apt-get update && apt-get install -y adwaita-icon-theme-full librsvg2-common"`, then restart Vitis.
 - **`vivado: command not found`:** the command is missing `bash -ic`, or it ran in the plain "Ubuntu" distro. `wsl -l -v` should show a `*` next to Ubuntu-22.04.
 - **A build runs out of memory:** close large Windows apps such as browsers. WSL can use up to 12 GB of RAM plus 16 GB of swap.
 - **Hardware Manager can't see the KR260 after a replug or a WSL restart:** run the `usbipd attach` command again.

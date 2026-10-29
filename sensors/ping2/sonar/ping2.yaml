@@ -1,0 +1,21 @@
+# Ping2 sonar settings, read by ~/sonar/ping2_node.py.
+# The sonar forgets its settings at every power-up; the node sends these whenever the sonar
+# connects, restarts or stops streaming.
+#   Change for good:   nano ~/sonar/ping2.yaml   then   sudo systemctl restart ping2
+#   Try a value live:  ros2 param set /ping2 water_temp_c 11.5     (lasts until restart)
+ping2:
+  ros__parameters:
+    device: /dev/serial/by-id/usb-FTDI_FT231X_USB_UART_DP05HMFG-if00-port0   # the BLUART
+    frame_id: sonar_link
+
+    water_temp_c: 15.0        # measured water temperature; sets the fresh-water speed of sound
+    speed_of_sound_mps: 0.0   # above 0, used instead of water_temp_c (e.g. 1482.0)
+
+    ping_interval_ms: 100     # shortest time between pings (0 = sonar default, 250). Deep water pings slower.
+
+    mode_auto: true           # true = the sonar picks its search range and gain every ping
+    scan_start_m: 0.0         # manual mode only: where the search window starts
+    scan_length_m: 10.0       # manual mode only: window length, 1-100 m
+    gain_setting: 3           # manual mode only: 0 (lowest) to 6 (highest)
+
+    min_confidence: 0         # /sonar/range reads +inf below this confidence (0 = keep every ping)

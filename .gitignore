@@ -45,3 +45,19 @@ Thumbs.db
 
 # --- Planning docs kept out of git (managed in the live shared copy instead) ---
 ENGR496_Li_ASV_Project_Plan.xlsx
+
+# --- Build results: share them on a GitHub Release, not in git (see "SoC files/README.md") ---
+*.bit
+*.bit.bin
+*.xsa
+*.xclbin
+*.xo
+*.dcp
+*.dtbo
+*.ltx
+*.pdi
+*.hwh
+*.wdb
+_x/
+vitis_workspace/
+release_*/
